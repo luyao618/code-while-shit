@@ -1,0 +1,22 @@
+................F......F
+======================================================================
+FAIL: test_submission_with_mismatched_open_message_id_is_rejected (tests.test_service.AdditionalBridgeServiceTests.test_submission_with_mismatched_open_message_id_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/yao/work/code/personal/code-while-shit/.omx/team/execute-the-approved-feishu-0/worktrees/worker-3/tests/test_service.py", line 478, in test_submission_with_mismatched_open_message_id_is_rejected
+    self.assertFalse(BridgeService._submission_matches_pending(submission, pending))
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_process_turn_emits_normalized_progress_updates (tests.test_codex_app_server.CodexBackendTests.test_process_turn_emits_normalized_progress_updates)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/yao/work/code/personal/code-while-shit/.omx/team/execute-the-approved-feishu-0/worktrees/worker-3/tests/test_codex_app_server.py", line 115, in test_process_turn_emits_normalized_progress_updates
+    self.assertTrue(all(isinstance(update, ProgressUpdate) for update in observed[:2]))
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 24 tests in 1.073s
+
+FAILED (failures=2)
+EXIT=1
