@@ -17,6 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 claude = ["claude-agent-sdk>=0.1.0"]
 
+[project.scripts]
+vcws = "vcws.__main__:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

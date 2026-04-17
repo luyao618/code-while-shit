@@ -22,10 +22,10 @@ def test_conflict_workspace_raises(tmp_path):
         AppConfig.from_sources(ns, env={"CWS_DEFAULT_WORKSPACE": "/y"})
 
 
-def test_agent_required():
+def test_agent_defaults_to_codex():
     ns = _args()
-    with pytest.raises(ConfigConflictError, match="agent"):
-        AppConfig.from_sources(ns, env={})
+    cfg = AppConfig.from_sources(ns, env={})
+    assert isinstance(cfg.agent, CodexAgentConfig)
 
 
 def test_env_only_agent_via_vcws_agent():
