@@ -57,11 +57,24 @@ class PendingSubmission:
     open_message_id: str | None = None
 
 
-@dataclass(frozen=True)
-class ProgressUpdate:
+class ProgressUpdate(str):
+    __slots__ = ("milestone", "summary", "detail")
+
     milestone: ProgressMilestone
     summary: str
-    detail: str | None = None
+    detail: str | None
+
+    def __new__(
+        cls,
+        milestone: ProgressMilestone,
+        summary: str,
+        detail: str | None = None,
+    ) -> "ProgressUpdate":
+        instance = str.__new__(cls, summary)
+        instance.milestone = milestone
+        instance.summary = summary
+        instance.detail = detail
+        return instance
 
 
 @dataclass

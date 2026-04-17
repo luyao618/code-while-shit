@@ -15,12 +15,14 @@ from .config import AppConfig
 from .models import (
     Actor,
     ApprovalRequest,
+    ApprovalCardStatus,
     ConversationRef,
     ConversationSession,
     InboundMessage,
     InputRequest,
     PendingInteraction,
     PendingSubmission,
+    ProgressUpdate,
     WorkspaceBinding,
 )
 from .policy import ApprovalPolicy
@@ -122,6 +124,11 @@ class BridgeService:
 
     @classmethod
     def _normalize_progress_update(cls, update: object) -> tuple[str, str]:
+        if isinstance(update, ProgressUpdate):
+            text = update.summary
+            if update.detail:
+                text = f"{text}\n{update.detail}"
+            return update.milestone, text
         if isinstance(update, TurnMilestoneUpdate):
             return update.milestone, cls._milestone_text(update.milestone, update.text)
         if isinstance(update, str):
@@ -155,20 +162,16 @@ class BridgeService:
     def _attempt_ack(self, message: InboundMessage) -> bool:
         if not message.source_message_id:
             return False
-        for name in ("send_ack", "ack_message", "acknowledge_message"):
-            method = getattr(self.adapter, name, None)
-            if callable(method):
-                try:
-                    result = self._call_with_supported_kwargs(
-                        method,
-                        message.conversation,
-                        message.source_message_id,
-                        source_message_id=message.source_message_id,
-                    )
-                except Exception:
-                    return False
-                return False if result is False else True
-        return False
+        try:
+            return bool(
+                self._call_with_supported_kwargs(
+                    self.adapter.acknowledge_message,
+                    message.conversation,
+                    source_message_id=message.source_message_id,
+                )
+            )
+        except Exception:
+            return False
 
     def _publish_progress_surface(
         self,
@@ -190,57 +193,44 @@ class BridgeService:
             state=self._session_state_for_milestone(milestone, session.state),
         )
         self.state.save_session(updated)
-        result: Any = None
-        used_existing_handle = False
-        if existing_handle:
-            for name in ("update_progress", "update_progress_message"):
-                method = getattr(self.adapter, name, None)
-                if callable(method):
-                    result = self._call_with_supported_kwargs(
-                        method,
-                        conversation,
-                        text,
-                        message_id=existing_handle,
-                        milestone=milestone,
-                        final=final,
-                        source_message_id=updated.last_source_message_id,
-                    )
-                    used_existing_handle = True
-                    break
-        if result is None:
-            result = self._call_with_supported_kwargs(
-                self.adapter.send_status,
-                conversation,
-                text,
-                message_id=existing_handle,
-                milestone=milestone,
-                final=final,
-                source_message_id=updated.last_source_message_id,
-            )
-            used_existing_handle = existing_handle is not None
+        progress = ProgressUpdate(milestone, text)
+        result = self._call_with_supported_kwargs(
+            self.adapter.upsert_progress,
+            conversation,
+            progress,
+            message_id=existing_handle,
+            reply_to_message_id=updated.last_source_message_id,
+            source_message_id=updated.last_source_message_id,
+        )
         handle = self._extract_message_handle(result)
         if handle:
             updated = self._replace_session(updated, progress_message_id=handle)
-        elif existing_handle and used_existing_handle:
+        elif existing_handle:
             updated = self._replace_session(updated, progress_message_id=existing_handle)
         self.state.save_session(updated)
         return updated
 
     def _resolve_pending_surface(self, pending: PendingInteraction, status: str, detail: str) -> None:
         approval_handle = getattr(pending, "approval_message_id", None)
-        for name in ("resolve_approval", "resolve_approval_message", "update_approval"):
-            method = getattr(self.adapter, name, None)
-            if callable(method):
-                self._call_with_supported_kwargs(
-                    method,
-                    pending.conversation,
-                    pending.request_id,
-                    message_id=approval_handle,
-                    status=status,
-                    detail=detail,
-                    pending=pending,
-                )
-                return
+        prompt = ApprovalPrompt(
+            request_id=pending.request_id,
+            title=pending.title,
+            prompt=pending.prompt,
+            command=pending.command,
+            reason=str(pending.metadata.get("reason") or "") or None,
+            codex_thread_id=pending.codex_thread_id,
+            codex_turn_id=pending.codex_turn_id,
+            codex_item_id=pending.codex_item_id,
+        )
+        normalized_status: ApprovalCardStatus = "approved" if status == "approve" else "denied"
+        self._call_with_supported_kwargs(
+            self.adapter.resolve_approval,
+            pending.conversation,
+            prompt,
+            message_id=approval_handle,
+            status=normalized_status,
+            detail=detail,
+        )
 
     def handle_message(self, message: InboundMessage) -> None:
         if not self._is_allowed(message.actor):
@@ -429,6 +419,9 @@ class BridgeService:
                 title=pending.title,
                 prompt=pending.prompt,
                 command=request.command,
+                reason=decision.reason,
+                cwd=request.cwd,
+                method=request.method,
                 codex_thread_id=request.codex_thread_id,
                 codex_turn_id=request.turn_id,
                 codex_item_id=request.item_id,
@@ -632,4 +625,6 @@ class BridgeService:
             return False
         if submission.codex_item_id and pending.codex_item_id and submission.codex_item_id != pending.codex_item_id:
             return False
+        if submission.open_message_id and getattr(pending, "approval_message_id", None):
+            return submission.open_message_id == getattr(pending, "approval_message_id", None)
         return True

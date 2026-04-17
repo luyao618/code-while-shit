@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .config import CodexConfig
-from .models import ApprovalRequest, ConversationRef, InputRequest, TurnOutcome
+from .models import ApprovalRequest, ConversationRef, InputRequest, ProgressUpdate, TurnOutcome
 
 JsonDict = dict[str, Any]
 RequestHandler = Callable[[JsonDict], Any | None]
@@ -184,17 +184,8 @@ class TurnTracker:
         return "".join(self.summary_chunks).strip()
 
 
-class TurnMilestoneUpdate(str):
-    __slots__ = ("milestone", "text")
-
-    milestone: str
-    text: str
-
-    def __new__(cls, milestone: str, text: str) -> "TurnMilestoneUpdate":
-        instance = str.__new__(cls, text)
-        instance.milestone = milestone
-        instance.text = text
-        return instance
+class TurnMilestoneUpdate(ProgressUpdate):
+    pass
 
 
 class CodexAppServerBackend:
@@ -307,7 +298,7 @@ class CodexAppServerBackend:
             return
         if method in {"thread/statusChanged", "turn/statusChanged"}:
             update = self._status_update_from_notification(params)
-            status_key = f"{update.milestone}:{update.text}" if update else None
+            status_key = f"{update.milestone}:{update.summary}" if update else None
             if update and status_key != tracker.last_status:
                 tracker.last_status = status_key
                 publish_status(update)
@@ -407,7 +398,6 @@ class CodexAppServerBackend:
                 permissions=dict(params.get("permissions") or {}),
             )
             decision = request_approval(approval)
-            publish_status(TurnMilestoneUpdate("running", "处理中：已收到你的确认，继续执行。"))
             return self._approval_response(method, params, decision)
         return None
 
