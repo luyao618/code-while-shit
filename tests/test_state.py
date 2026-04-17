@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codewhileshit.models import ConversationRef, PendingInteraction
-from codewhileshit.state import StateStore
+from vcws.models import ConversationRef, PendingInteraction
+from vcws.state import StateStore
 
 
 class StateStoreTests(unittest.TestCase):

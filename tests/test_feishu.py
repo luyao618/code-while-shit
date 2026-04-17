@@ -5,9 +5,9 @@ import unittest
 
 from lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1
 from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTrigger
-from codewhileshit.models import PendingSubmission
+from vcws.models import PendingSubmission
 
-from codewhileshit.feishu import (
+from vcws.feishu import (
     FeishuWebSocketGateway,
     _build_approval_card,
     _build_progress_card,
@@ -15,8 +15,8 @@ from codewhileshit.feishu import (
     _parse_card_action_submission,
     _parse_message_event,
 )
-from codewhileshit.channels import ApprovalPrompt
-from codewhileshit.models import ConversationRef, ProgressUpdate
+from vcws.channels import ApprovalPrompt
+from vcws.models import ConversationRef, ProgressUpdate
 
 HAS_APPROVAL_MESSAGE_HANDLE = "open_message_id" in PendingSubmission.__dataclass_fields__
 

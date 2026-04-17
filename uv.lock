@@ -114,7 +114,7 @@ wheels = [
 ]
 
 [[package]]
-name = "code-while-shit"
+name = "vibe-coding-while-shit"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

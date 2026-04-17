@@ -6,11 +6,11 @@ import time
 import unittest
 from pathlib import Path
 
-from codewhileshit.channels import ApprovalPrompt, ChannelAdapter, InputPrompt
-from codewhileshit.config import AppConfig, CodexConfig, FeishuConfig
-from codewhileshit.models import Actor, ApprovalRequest, ConversationRef, ConversationSession, InboundMessage, InputRequest, PendingInteraction, PendingSubmission, TurnOutcome, WorkspaceBinding
-from codewhileshit.service import BridgeService
-from codewhileshit.state import StateStore
+from vcws.channels import ApprovalPrompt, ChannelAdapter, InputPrompt
+from vcws.config import AppConfig, CodexConfig, FeishuConfig
+from vcws.models import Actor, ApprovalRequest, ConversationRef, ConversationSession, InboundMessage, InputRequest, PendingInteraction, PendingSubmission, TurnOutcome, WorkspaceBinding
+from vcws.service import BridgeService
+from vcws.state import StateStore
 
 HAS_PROGRESS_SURFACE_STATE = all(
     field in ConversationSession.__dataclass_fields__

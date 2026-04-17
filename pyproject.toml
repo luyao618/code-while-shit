@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "code-while-shit"
+name = "vibe-coding-while-shit"
 version = "0.1.0"
 description = "Feishu-driven remote Codex bridge MVP"
 readme = "README.md"
