@@ -291,7 +291,10 @@ class BridgeService:
             if session is None:
                 self.adapter.send_result(pending.conversation, "等待中的执行上下文已经失效，请重新发起任务。")
                 return
-            self.state.clear_pending(submission.request_id, status="recovered")
+            cleared = self.state.clear_pending(submission.request_id, status="recovered")
+            if cleared is not None and cleared.kind == "approval":
+                detail = "已确认，服务正在恢复执行。" if submission.decision == "approve" else "已拒绝，服务将在恢复时停止该敏感操作。"
+                self._resolve_pending_surface(cleared, submission.decision or "deny", detail)
             self.adapter.send_status(pending.conversation, "服务已重启：已收到你的回复，正在原线程尝试恢复执行。")
             self._executor.submit(self._resume_pending_turn, session, pending, submission)
             return
@@ -300,33 +303,45 @@ class BridgeService:
             slot["value"] = submission.decision or "deny"
         else:
             slot["value"] = (submission.text or "").strip()
-        self.state.clear_pending(submission.request_id)
+        cleared = self.state.clear_pending(submission.request_id)
+        if cleared is not None and cleared.kind == "approval":
+            detail = "已确认，继续执行。" if submission.decision == "approve" else "已拒绝，本轮任务将停止。"
+            self._resolve_pending_surface(cleared, submission.decision or "deny", detail)
         event.set()
         self.adapter.send_status(pending.conversation, "已收到你的回复，继续执行。")
 
     def _run_turn(self, message: InboundMessage, session: ConversationSession) -> None:
         lock = self._conversation_locks.setdefault(session.key, threading.Lock())
         with lock:
-            session = replace(
+            session = self._replace_session(
                 self.state.ensure_session(message.conversation, session.active_workspace),
                 state="running",
-                last_status="处理中",
+                last_status=self._milestone_text("accepted"),
                 last_source_message_id=message.source_message_id,
+                progress_message_id=None,
+                progress_milestone=None,
             )
             self.state.save_session(session)
+            self._attempt_ack(message)
+            session = self._publish_progress_surface(
+                message.conversation,
+                session,
+                "accepted",
+                self._milestone_text("accepted"),
+            )
             binding = self.state.ensure_binding(message.conversation, session.active_workspace)
             try:
-                def publish_status(text: str) -> None:
-                    current = self.state.get_session(message.conversation) or session
-                    next_state = current.state
-                    if "等待确认" in text:
-                        next_state = "waiting_approval"
-                    elif "等待补充" in text:
-                        next_state = "waiting_input"
-                    elif "处理" in text or "继续执行" in text:
-                        next_state = "running"
-                    self.state.save_session(replace(current, state=next_state, last_status=text))
-                    self.adapter.send_status(message.conversation, text)
+                session_holder = {"current": session}
+
+                def publish_status(update: object) -> None:
+                    current = self.state.get_session(message.conversation) or session_holder["current"]
+                    milestone, text = self._normalize_progress_update(update)
+                    session_holder["current"] = self._publish_progress_surface(
+                        message.conversation,
+                        current,
+                        milestone,
+                        text,
+                    )
 
                 outcome = self.backend.process_turn(
                     conversation=message.conversation,
@@ -337,20 +352,52 @@ class BridgeService:
                     request_input=lambda request: self._request_input(session, message.actor, request),
                     publish_status=publish_status,
                 )
-                final_session = replace(
-                    session,
+                current = self.state.get_session(message.conversation) or session_holder["current"]
+                final_milestone = "completed" if outcome.status == "completed" else "failed"
+                final_text = self._final_progress_text(outcome.status, outcome.error or outcome.summary)
+                current = self._publish_progress_surface(
+                    message.conversation,
+                    current,
+                    final_milestone,
+                    final_text,
+                    final=True,
+                )
+                final_session = self._replace_session(
+                    current,
                     state="idle" if outcome.status == "completed" else "failed",
-                    last_status=outcome.status,
+                    last_status=final_text,
                     pending_request_id=None,
+                    progress_milestone=final_milestone,
                 )
                 self.state.save_session(final_session)
-                self.state.save_binding(WorkspaceBinding(session_key=session.key, workspace_path=session.active_workspace, codex_thread_id=outcome.thread_id))
+                self.state.save_binding(
+                    WorkspaceBinding(
+                        session_key=session.key,
+                        workspace_path=session.active_workspace,
+                        codex_thread_id=outcome.thread_id,
+                    )
+                )
                 if outcome.status == "completed":
                     self.adapter.send_result(message.conversation, outcome.summary)
                 else:
                     self.adapter.send_result(message.conversation, outcome.error or outcome.summary)
             except Exception as exc:
-                errored = replace(session, state="failed", last_status=str(exc), pending_request_id=None)
+                current = self.state.get_session(message.conversation) or session
+                final_text = self._final_progress_text("failed", f"失败：{exc}")
+                current = self._publish_progress_surface(
+                    message.conversation,
+                    current,
+                    "failed",
+                    final_text,
+                    final=True,
+                )
+                errored = self._replace_session(
+                    current,
+                    state="failed",
+                    last_status=final_text,
+                    pending_request_id=None,
+                    progress_milestone="failed",
+                )
                 self.state.save_session(errored)
                 self.adapter.send_result(message.conversation, f"执行失败：{exc}")
 
@@ -374,7 +421,7 @@ class BridgeService:
             metadata={"reason": decision.reason, "actor_user_id": actor.user_id},
         )
         self.state.set_pending(pending)
-        self.adapter.request_approval(
+        result = self.adapter.request_approval(
             request.conversation,
             ApprovalPrompt(
                 request_id=request_id,
@@ -386,6 +433,10 @@ class BridgeService:
                 codex_item_id=request.item_id,
             ),
         )
+        handle = self._extract_message_handle(result)
+        if handle:
+            setattr(pending, "approval_message_id", handle)
+            self.state.set_pending(pending)
         return self._wait_for_pending_value(request_id, default="deny")
 
     def _request_input(self, session: ConversationSession, actor: Actor, request: InputRequest) -> str:
@@ -508,6 +559,10 @@ class BridgeService:
         status.extend([f"状态：{session.state}", f"工作目录：{session.active_workspace}"])
         if binding and binding.codex_thread_id:
             status.append(f"Codex Thread：{binding.codex_thread_id}")
+        if getattr(session, "progress_milestone", None):
+            status.append(f"进度阶段：{getattr(session, 'progress_milestone')}")
+        if getattr(session, "progress_message_id", None):
+            status.append(f"进度消息：{getattr(session, 'progress_message_id')}")
         if session.last_status:
             status.append(f"最近事件：{session.last_status}")
         if session.recovery_note:

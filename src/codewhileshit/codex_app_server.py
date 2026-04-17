@@ -225,7 +225,7 @@ class CodexAppServerBackend:
                 lambda notification: self._handle_notification(notification, tracker, publish_status)
             )
             try:
-                publish_status(TurnMilestoneUpdate("thinking", "正在思考：Codex 正在分析你的请求。"))
+                publish_status(TurnMilestoneUpdate("running", "处理中：Codex 正在执行任务。"))
                 turn_result = self._client.request(
                     "turn/start",
                     {
@@ -331,7 +331,7 @@ class CodexAppServerBackend:
             return None
         normalized = status.strip().lower()
         if normalized in {"running", "in_progress", "working"}:
-            return TurnMilestoneUpdate("running", "正在处理：Codex 正在执行任务。")
+            return TurnMilestoneUpdate("running", "处理中：Codex 正在执行任务。")
         if normalized in {"waiting_input", "needs_input"}:
             return TurnMilestoneUpdate("waiting_input", "等待补充信息：Codex 需要你的进一步说明。")
         if normalized in {"waiting_approval", "needs_approval"}:
@@ -400,7 +400,7 @@ class CodexAppServerBackend:
                 permissions=dict(params.get("permissions") or {}),
             )
             decision = request_approval(approval)
-            publish_status(TurnMilestoneUpdate("running", "正在处理：已收到你的确认，继续执行。"))
+            publish_status(TurnMilestoneUpdate("running", "处理中：已收到你的确认，继续执行。"))
             return self._approval_response(method, params, decision)
         return None
 
