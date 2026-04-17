@@ -498,7 +498,7 @@ def _build_progress_card(update: ProgressUpdate) -> dict[str, Any]:
     ]
     if update.detail:
         body.append({"tag": "markdown", "content": update.detail})
-    body.append({"tag": "note", "elements": [{"tag": "plain_text", "content": "该进度消息会在同一轮执行中持续更新。"}]})
+    body.append({"tag": "markdown", "content": "_该进度消息会在同一轮执行中持续更新。_"})
     return {
         "schema": "2.0",
         "config": {"width_mode": "fill"},
@@ -549,15 +549,7 @@ def _build_approval_card(
         deny_value = _approval_action_value(prompt, conversation=conversation, decision="deny")
         body.extend(
             [
-                {
-                    "tag": "note",
-                    "elements": [
-                        {
-                            "tag": "plain_text",
-                            "content": "确认后会继续当前 Codex 执行；拒绝会终止本次敏感操作。",
-                        }
-                    ],
-                },
+                {"tag": "markdown", "content": "_确认后会继续当前 Codex 执行；拒绝会终止本次敏感操作。_"},
                 {
                     "tag": "action",
                     "actions": [
@@ -577,17 +569,7 @@ def _build_approval_card(
             ]
         )
     else:
-        body.append(
-            {
-                "tag": "note",
-                "elements": [
-                    {
-                        "tag": "plain_text",
-                        "content": "该审批卡片已结束，不会再次触发相同操作。",
-                    }
-                ],
-            }
-        )
+        body.append({"tag": "markdown", "content": "_该审批卡片已结束，不会再次触发相同操作。_"})
     return {
         "schema": "2.0",
         "config": {"width_mode": "fill"},
