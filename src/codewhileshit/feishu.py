@@ -6,13 +6,22 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any, Callable
 
 from .channels import ApprovalPrompt, ChannelAdapter, InputPrompt
 from .config import AppConfig, FeishuConfig
-from .models import Actor, ConversationRef, InboundMessage, PendingSubmission
+from .models import (
+    Actor,
+    ApprovalCardStatus,
+    ConversationRef,
+    InboundMessage,
+    PendingSubmission,
+    ProgressMilestone,
+    ProgressUpdate,
+)
 
 
 def lark_sdk_available() -> bool:
@@ -45,33 +54,101 @@ class FeishuApiClient:
         self._tenant_token: str | None = None
         self._expires_at = 0.0
 
-    def send_text(self, conversation: ConversationRef, text: str) -> None:
+    def send_text(
+        self,
+        conversation: ConversationRef,
+        text: str,
+        *,
+        reply_to_message_id: str | None = None,
+    ) -> str | None:
         content = json.dumps({"text": text}, ensure_ascii=False)
-        self._send_message(conversation, "text", content)
+        return self._send_message(conversation, "text", content, reply_to_message_id=reply_to_message_id)
 
-    def send_card(self, conversation: ConversationRef, card: dict[str, Any]) -> None:
+    def send_card(
+        self,
+        conversation: ConversationRef,
+        card: dict[str, Any],
+        *,
+        reply_to_message_id: str | None = None,
+    ) -> str | None:
         content = json.dumps(card, ensure_ascii=False)
-        self._send_message(conversation, "interactive", content)
+        return self._send_message(conversation, "interactive", content, reply_to_message_id=reply_to_message_id)
 
-    def _send_message(self, conversation: ConversationRef, msg_type: str, content: str) -> None:
-        token = self._tenant_access_token()
+    def update_text(self, message_id: str, text: str) -> bool:
+        return self._patch_message(message_id, json.dumps({"text": text}, ensure_ascii=False))
+
+    def update_card(self, message_id: str, card: dict[str, Any]) -> bool:
+        return self._patch_message(message_id, json.dumps(card, ensure_ascii=False))
+
+    def add_reaction(self, message_id: str, emoji_type: str = "OK") -> bool:
+        self._request_json(
+            method="POST",
+            path=f"/im/v1/messages/{urllib.parse.quote(message_id, safe='')}/reactions",
+            payload={"reaction_type": {"emoji_type": emoji_type}},
+        )
+        return True
+
+    def _send_message(
+        self,
+        conversation: ConversationRef,
+        msg_type: str,
+        content: str,
+        *,
+        reply_to_message_id: str | None = None,
+    ) -> str | None:
         payload = {
-            "receive_id": conversation.conversation_id,
             "msg_type": msg_type,
             "content": content,
+            "uuid": f"cws-{uuid.uuid4()}",
         }
-        query = urllib.parse.urlencode({"receive_id_type": "chat_id"})
-        url = f"{self._config.base_url}/im/v1/messages?{query}"
+        if reply_to_message_id:
+            payload["reply_in_thread"] = False
+            response = self._request_json(
+                method="POST",
+                path=f"/im/v1/messages/{urllib.parse.quote(reply_to_message_id, safe='')}/reply",
+                payload=payload,
+            )
+        else:
+            response = self._request_json(
+                method="POST",
+                path="/im/v1/messages",
+                payload={**payload, "receive_id": conversation.conversation_id},
+                query={"receive_id_type": "chat_id"},
+            )
+        return _extract_message_id(response)
+
+    def _patch_message(self, message_id: str, content: str) -> bool:
+        self._request_json(
+            method="PATCH",
+            path=f"/im/v1/messages/{urllib.parse.quote(message_id, safe='')}",
+            payload={"content": content},
+        )
+        return True
+
+    def _request_json(
+        self,
+        *,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        query: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        token = self._tenant_access_token()
+        encoded_query = f"?{urllib.parse.urlencode(query)}" if query else ""
         request = urllib.request.Request(
-            url,
-            method="POST",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            f"{self._config.base_url}{path}{encoded_query}",
+            method=method,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json; charset=utf-8",
             },
         )
-        self._read_json(request)
+        response = self._read_json(request)
+        code = response.get("code")
+        if isinstance(code, int) and code != 0:
+            raise RuntimeError(f"Feishu API error {code}: {response.get('msg') or response}")
+        return response
 
     def _tenant_access_token(self) -> str:
         with self._token_lock:
@@ -116,45 +193,53 @@ class FeishuAdapter(ChannelAdapter):
     def send_result(self, conversation: ConversationRef, text: str) -> None:
         self._client.send_text(conversation, text)
 
+    def acknowledge_message(self, conversation: ConversationRef, *, source_message_id: str | None) -> bool:
+        if not source_message_id:
+            return False
+        try:
+            return self._client.add_reaction(source_message_id)
+        except RuntimeError:
+            return False
+
+    def upsert_progress(
+        self,
+        conversation: ConversationRef,
+        update: ProgressUpdate,
+        *,
+        message_id: str | None = None,
+        reply_to_message_id: str | None = None,
+        source_message_id: str | None = None,
+    ) -> str | None:
+        card = _build_progress_card(update)
+        try:
+            if message_id:
+                self._client.update_card(message_id, card)
+                return message_id
+            anchor = reply_to_message_id or source_message_id
+            return self._client.send_card(conversation, card, reply_to_message_id=anchor)
+        except RuntimeError:
+            fallback = f"{update.summary}\n{update.detail}" if update.detail else update.summary
+            self._client.send_text(conversation, fallback, reply_to_message_id=reply_to_message_id or source_message_id)
+            return None
+
     def request_approval(self, conversation: ConversationRef, prompt: ApprovalPrompt) -> None:
-        context = {
-            "request_id": prompt.request_id,
-            "decision": "approve",
-            "conversation_id": conversation.conversation_id,
-            "account_id": conversation.account_id,
-            "thread_id": conversation.thread_id,
-            "codex_thread_id": prompt.codex_thread_id,
-            "codex_turn_id": prompt.codex_turn_id,
-            "codex_item_id": prompt.codex_item_id,
-        }
-        deny_context = {**context, "decision": "deny"}
-        card = {
-            "schema": "2.0",
-            "config": {"width_mode": "fill"},
-            "header": {"title": {"tag": "plain_text", "content": prompt.title}, "template": "orange"},
-            "body": {
-                "elements": [
-                    {"tag": "markdown", "content": prompt.prompt},
-                    {
-                        "tag": "action",
-                        "actions": [
-                            {
-                                "tag": "button",
-                                "text": {"tag": "plain_text", "content": "确认"},
-                                "type": "primary",
-                                "value": json.dumps(context, ensure_ascii=False),
-                            },
-                            {
-                                "tag": "button",
-                                "text": {"tag": "plain_text", "content": "拒绝"},
-                                "value": json.dumps(deny_context, ensure_ascii=False),
-                            },
-                        ],
-                    },
-                ]
-            },
-        }
-        self._client.send_card(conversation, card)
+        self._client.send_card(conversation, _build_approval_card(prompt, status="pending"))
+
+    def resolve_approval(
+        self,
+        conversation: ConversationRef,
+        prompt: ApprovalPrompt,
+        *,
+        message_id: str | None,
+        status: ApprovalCardStatus,
+        detail: str | None = None,
+    ) -> bool:
+        if not message_id:
+            return False
+        try:
+            return self._client.update_card(message_id, _build_approval_card(prompt, status=status, detail=detail))
+        except RuntimeError:
+            return False
 
     def request_user_input(self, conversation: ConversationRef, prompt: InputPrompt) -> None:
         self._client.send_text(
@@ -379,4 +464,147 @@ def _parse_card_action_submission(event: Any) -> PendingSubmission | None:
         codex_thread_id=str(value.get("codex_thread_id")) if value.get("codex_thread_id") else None,
         codex_turn_id=str(value.get("codex_turn_id")) if value.get("codex_turn_id") else None,
         codex_item_id=str(value.get("codex_item_id")) if value.get("codex_item_id") else None,
+        open_message_id=str(_event_attr(event, "event", "context", "open_message_id") or "") or None,
     )
+
+
+def _extract_message_id(response: dict[str, Any]) -> str | None:
+    data = response.get("data")
+    if isinstance(data, dict):
+        if isinstance(data.get("message_id"), str):
+            return data["message_id"]
+        message = data.get("message")
+        if isinstance(message, dict) and isinstance(message.get("message_id"), str):
+            return message["message_id"]
+    if isinstance(response.get("message_id"), str):
+        return response["message_id"]
+    return None
+
+
+def _build_progress_card(update: ProgressUpdate) -> dict[str, Any]:
+    title, template, badge = _progress_style(update.milestone)
+    body = [
+        {"tag": "markdown", "content": f"**{badge} {update.summary}**"},
+    ]
+    if update.detail:
+        body.append({"tag": "markdown", "content": update.detail})
+    body.append({"tag": "note", "elements": [{"tag": "plain_text", "content": "该进度消息会在同一轮执行中持续更新。"}]})
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "fill"},
+        "header": {
+            "title": {"tag": "plain_text", "content": title},
+            "template": template,
+        },
+        "body": {"elements": body},
+    }
+
+
+def _progress_style(milestone: ProgressMilestone) -> tuple[str, str, str]:
+    mapping: dict[ProgressMilestone, tuple[str, str, str]] = {
+        "accepted": ("已收到请求", "blue", "📨"),
+        "running": ("正在处理", "wathet", "⏳"),
+        "waiting_approval": ("等待确认", "orange", "⚠️"),
+        "waiting_input": ("等待补充信息", "orange", "📝"),
+        "completed": ("已完成", "green", "✅"),
+        "failed": ("执行失败", "red", "❌"),
+    }
+    return mapping[milestone]
+
+
+def _build_approval_card(
+    prompt: ApprovalPrompt,
+    *,
+    status: ApprovalCardStatus,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    title, template, badge = _approval_style(status)
+    body: list[dict[str, Any]] = [
+        {"tag": "markdown", "content": f"**{badge} {prompt.title}**"},
+        {"tag": "markdown", "content": prompt.prompt},
+    ]
+    if prompt.reason:
+        body.append({"tag": "markdown", "content": f"**触发原因**\n{prompt.reason}"})
+    if prompt.command:
+        body.append({"tag": "markdown", "content": f"**命令**\n```bash\n{prompt.command}\n```"})
+    if prompt.cwd:
+        body.append({"tag": "markdown", "content": f"**工作目录**\n`{prompt.cwd}`"})
+    if prompt.method:
+        body.append({"tag": "markdown", "content": f"**审批类型**\n`{prompt.method}`"})
+    if detail:
+        body.append({"tag": "markdown", "content": f"**处理结果**\n{detail}"})
+    if status == "pending":
+        approve_value = _approval_action_value(prompt, decision="approve")
+        deny_value = _approval_action_value(prompt, decision="deny")
+        body.extend(
+            [
+                {
+                    "tag": "note",
+                    "elements": [
+                        {
+                            "tag": "plain_text",
+                            "content": "确认后会继续当前 Codex 执行；拒绝会终止本次敏感操作。",
+                        }
+                    ],
+                },
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "继续执行"},
+                            "type": "primary",
+                            "value": json.dumps(approve_value, ensure_ascii=False),
+                        },
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "拒绝本次操作"},
+                            "value": json.dumps(deny_value, ensure_ascii=False),
+                        },
+                    ],
+                },
+            ]
+        )
+    else:
+        body.append(
+            {
+                "tag": "note",
+                "elements": [
+                    {
+                        "tag": "plain_text",
+                        "content": "该审批卡片已结束，不会再次触发相同操作。",
+                    }
+                ],
+            }
+        )
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "fill"},
+        "header": {"title": {"tag": "plain_text", "content": title}, "template": template},
+        "body": {"elements": body},
+    }
+
+
+def _approval_action_value(prompt: ApprovalPrompt, *, decision: str) -> dict[str, Any]:
+    return {
+        "request_id": prompt.request_id,
+        "decision": decision,
+        "conversation_id": prompt.request_id and None,
+        "account_id": "default",
+        "thread_id": None,
+        "codex_thread_id": prompt.codex_thread_id,
+        "codex_turn_id": prompt.codex_turn_id,
+        "codex_item_id": prompt.codex_item_id,
+    }
+
+
+def _approval_style(status: ApprovalCardStatus) -> tuple[str, str, str]:
+    mapping: dict[ApprovalCardStatus, tuple[str, str, str]] = {
+        "pending": ("需要确认的操作", "orange", "⚠️"),
+        "approved": ("已确认，继续执行", "green", "✅"),
+        "denied": ("已拒绝本次操作", "red", "⛔"),
+        "expired": ("确认已过期", "grey", "⌛"),
+        "duplicate": ("该操作已处理", "grey", "ℹ️"),
+        "error": ("处理失败", "red", "❌"),
+    }
+    return mapping[status]
