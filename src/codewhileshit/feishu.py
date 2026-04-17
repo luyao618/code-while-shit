@@ -493,20 +493,19 @@ def _extract_message_id(response: dict[str, Any]) -> str | None:
 
 def _build_progress_card(update: ProgressUpdate) -> dict[str, Any]:
     title, template, badge = _progress_style(update.milestone)
-    body = [
+    elements = [
         {"tag": "markdown", "content": f"**{badge} {update.summary}**"},
     ]
     if update.detail:
-        body.append({"tag": "markdown", "content": update.detail})
-    body.append({"tag": "markdown", "content": "_该进度消息会在同一轮执行中持续更新。_"})
+        elements.append({"tag": "markdown", "content": update.detail})
+    elements.append({"tag": "markdown", "content": "_该进度消息会在同一轮执行中持续更新。_"})
     return {
-        "schema": "2.0",
-        "config": {"width_mode": "fill"},
+        "config": {"wide_screen_mode": True},
         "header": {
-            "title": {"tag": "plain_text", "content": title},
+            "title": {"content": title, "tag": "plain_text"},
             "template": template,
         },
-        "body": {"elements": body},
+        "elements": elements,
     }
 
 
@@ -530,24 +529,24 @@ def _build_approval_card(
     detail: str | None = None,
 ) -> dict[str, Any]:
     title, template, badge = _approval_style(status)
-    body: list[dict[str, Any]] = [
+    elements: list[dict[str, Any]] = [
         {"tag": "markdown", "content": f"**{badge} {prompt.title}**"},
         {"tag": "markdown", "content": prompt.prompt},
     ]
     if prompt.reason:
-        body.append({"tag": "markdown", "content": f"**触发原因**\n{prompt.reason}"})
+        elements.append({"tag": "markdown", "content": f"**触发原因**\n{prompt.reason}"})
     if prompt.command:
-        body.append({"tag": "markdown", "content": f"**命令**\n```bash\n{prompt.command}\n```"})
+        elements.append({"tag": "markdown", "content": f"**命令**\n```bash\n{prompt.command}\n```"})
     if prompt.cwd:
-        body.append({"tag": "markdown", "content": f"**工作目录**\n`{prompt.cwd}`"})
+        elements.append({"tag": "markdown", "content": f"**工作目录**\n`{prompt.cwd}`"})
     if prompt.method:
-        body.append({"tag": "markdown", "content": f"**审批类型**\n`{prompt.method}`"})
+        elements.append({"tag": "markdown", "content": f"**审批类型**\n`{prompt.method}`"})
     if detail:
-        body.append({"tag": "markdown", "content": f"**处理结果**\n{detail}"})
+        elements.append({"tag": "markdown", "content": f"**处理结果**\n{detail}"})
     if status == "pending":
         approve_value = _approval_action_value(prompt, conversation=conversation, decision="approve")
         deny_value = _approval_action_value(prompt, conversation=conversation, decision="deny")
-        body.extend(
+        elements.extend(
             [
                 {"tag": "markdown", "content": "_确认后会继续当前 Codex 执行；拒绝会终止本次敏感操作。_"},
                 {
@@ -557,24 +556,23 @@ def _build_approval_card(
                             "tag": "button",
                             "text": {"tag": "plain_text", "content": "继续执行"},
                             "type": "primary",
-                            "value": json.dumps(approve_value, ensure_ascii=False),
+                            "value": approve_value,
                         },
                         {
                             "tag": "button",
                             "text": {"tag": "plain_text", "content": "拒绝本次操作"},
-                            "value": json.dumps(deny_value, ensure_ascii=False),
+                            "value": deny_value,
                         },
                     ],
                 },
             ]
         )
     else:
-        body.append({"tag": "markdown", "content": "_该审批卡片已结束，不会再次触发相同操作。_"})
+        elements.append({"tag": "markdown", "content": "_该审批卡片已结束，不会再次触发相同操作。_"})
     return {
-        "schema": "2.0",
-        "config": {"width_mode": "fill"},
-        "header": {"title": {"tag": "plain_text", "content": title}, "template": template},
-        "body": {"elements": body},
+        "config": {"wide_screen_mode": True},
+        "header": {"title": {"content": title, "tag": "plain_text"}, "template": template},
+        "elements": elements,
     }
 
 

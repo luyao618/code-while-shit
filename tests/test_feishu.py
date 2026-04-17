@@ -9,10 +9,14 @@ from codewhileshit.models import PendingSubmission
 
 from codewhileshit.feishu import (
     FeishuWebSocketGateway,
+    _build_approval_card,
+    _build_progress_card,
     _extract_text,
     _parse_card_action_submission,
     _parse_message_event,
 )
+from codewhileshit.channels import ApprovalPrompt
+from codewhileshit.models import ConversationRef, ProgressUpdate
 
 HAS_APPROVAL_MESSAGE_HANDLE = "open_message_id" in PendingSubmission.__dataclass_fields__
 
@@ -95,6 +99,33 @@ class FeishuWebSocketParsingTests(unittest.TestCase):
     def test_extract_text_falls_back_for_plain_content(self) -> None:
         self.assertEqual(_extract_text(json.dumps({"text": "hello"})), "hello")
         self.assertEqual(_extract_text("raw message"), "raw message")
+
+    def test_build_progress_card_uses_raw_elements_shape(self) -> None:
+        card = _build_progress_card(ProgressUpdate("running", "处理中：Codex 正在执行任务。"))
+        self.assertNotIn("schema", card)
+        self.assertNotIn("body", card)
+        self.assertEqual(card["config"], {"wide_screen_mode": True})
+        self.assertIn("elements", card)
+        self.assertIsInstance(card["elements"], list)
+
+    def test_build_approval_card_uses_raw_elements_shape(self) -> None:
+        prompt = ApprovalPrompt(
+            request_id="req-1",
+            title="需要确认的操作",
+            prompt="请确认",
+            command="rm -rf /tmp/demo",
+            reason="危险操作",
+            cwd="/tmp/demo",
+            method="item/commandExecution/requestApproval",
+        )
+        conversation = ConversationRef("feishu", "default", "chat-1")
+        card = _build_approval_card(prompt, conversation=conversation, status="pending")
+        self.assertNotIn("schema", card)
+        self.assertNotIn("body", card)
+        self.assertEqual(card["config"], {"wide_screen_mode": True})
+        self.assertIn("elements", card)
+        action = next(element for element in card["elements"] if element.get("tag") == "action")
+        self.assertEqual(action["actions"][0]["value"]["request_id"], "req-1")
 
 
 class FeishuWebSocketGatewayTests(unittest.TestCase):
