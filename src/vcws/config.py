@@ -8,9 +8,42 @@ from typing import Literal
 
 AgentType = Literal["codex", "claude-code", "opencode"]
 
+DEFAULT_AGENT: AgentType = "codex"
+
 
 class ConfigConflictError(ValueError):
     """CLI and env disagree on a setting."""
+
+
+def load_dotenv(path: Path) -> bool:
+    """Load KEY=VALUE pairs from `path` into os.environ, without overriding
+    keys that are already set. Returns True if the file was loaded.
+
+    Minimal parser — no `export`, no multi-line, no `${VAR}` expansion.
+    Blank lines and lines starting with `#` are ignored. Values may be
+    wrapped in matching single or double quotes.
+    """
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return False
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+    return True
 
 
 @dataclass(frozen=True)
@@ -97,7 +130,7 @@ class AppConfig:
             )
         agent_type = cli_agent or env_agent
         if not agent_type:
-            raise ConfigConflictError("agent is required")
+            agent_type = DEFAULT_AGENT
 
         # --- workspace ---
         cli_workspace = getattr(args, "workspace", None) or None
@@ -171,7 +204,7 @@ class AppConfig:
             env = dict(os.environ)
         # Build a minimal namespace; agent defaults to codex for backward compat
         ns = argparse.Namespace(
-            agent=env.get("VCWS_AGENT", "codex"),
+            agent=env.get("VCWS_AGENT", DEFAULT_AGENT),
             workspace=None,
             allow_auto_approve=False,
             force=False,

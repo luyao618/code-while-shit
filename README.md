@@ -38,22 +38,16 @@ Bridge 是 Agent-agnostic 的；codex 是三个后端之一。运行时状态默
 ## 4. Quick Start
 
 ```bash
-python3 -m pip install -e .
-
-export FEISHU_APP_ID=cli_xxx
-export FEISHU_APP_SECRET=xxx
-export CWS_DEFAULT_WORKSPACE=/absolute/path/to/workspace
-
-python3 -m vcws doctor
-# 使用 codex
-python3 -m vcws serve --agent codex --workspace .
-
-# 使用 claude-code
-python3 -m vcws serve --agent claude-code --workspace .
-
-# 使用 opencode（审批需要 --allow-auto-approve）
-python3 -m vcws serve --agent opencode --workspace . --allow-auto-approve
+pip install -e .          # 或 uv pip install -e .
+vcws init                 # 生成 .env 与 workspace
+# 编辑 .env，填入 FEISHU_APP_ID / FEISHU_APP_SECRET
+vcws doctor               # 可选：自检 Feishu 凭证 + agent 依赖
+vcws serve                # 默认 codex
 ```
+
+需要其它 agent 时：`vcws serve --agent claude-code` 或 `vcws serve --agent opencode --allow-auto-approve`。
+
+`.env` 会被自动加载（显式 `export` 的环境变量优先级更高）。**请勿 commit `.env`** — 仓库默认把它加进了 `.gitignore`。老写法 `python3 -m vcws ...` 和显式 `export FEISHU_APP_ID=...` 依然可用。
 
 `doctor` 通过时会输出：
 
@@ -101,8 +95,9 @@ Feishu websocket mode active.
 
 | 命令 | 作用 |
 | --- | --- |
-| `python3 -m vcws doctor [--agent X]` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`lark-oapi` 及指定 Agent 的依赖是否可用 |
-| `python3 -m vcws serve --agent {codex,claude-code,opencode} [--workspace PATH] [--allow-auto-approve] [--force]` | 启动飞书 WebSocket bridge |
+| `vcws init [--workspace PATH] [--agent X]` | 生成模板 `.env` 并创建 workspace 目录 |
+| `vcws doctor [--agent X]` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`lark-oapi` 及 Agent 依赖是否可用。不传 `--agent` 时遍历所有 agent，仅 Feishu 问题会失败 |
+| `vcws serve [--agent {codex,claude-code,opencode}] [--workspace PATH] [--allow-auto-approve] [--force]` | 启动飞书 WebSocket bridge；`--agent` 未传时取 `$VCWS_AGENT`，仍未设置则使用 `codex` |
 
 ### 停止命令 / Stop commands
 
@@ -177,7 +172,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 - 目前只支持 **Feishu WebSocket** 入口，不支持 webhook 主路径
 - `serve` 启动前必须有 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
-- `serve` 现在**要求** `--agent` 参数；不传会以非零退出
+- `serve` 的 `--agent` 可选；未传时回落到 `$VCWS_AGENT`，再回落到 `codex`
 - 如果 `FEISHU_ALLOWED_USERS` 被设置，名单外用户会被拒绝
 - 如果 `/status` 里显示没有活跃 thread，说明这个会话还没真正开始过任务
 - 重启恢复会沿用同一会话的 Agent thread；它不是"回到中断 RPC 的精确现场"

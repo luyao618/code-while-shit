@@ -18,11 +18,13 @@ def _run(args, env=None):
     )
 
 
-def test_serve_without_agent_errors(tmp_path):
+def test_serve_without_agent_defaults_to_codex(tmp_path):
+    # Without FEISHU creds, serve should fail — but not because of --agent.
     r = _run(["serve"], env={"CWS_RUNTIME_DIR": str(tmp_path)})
     assert r.returncode != 0
-    # argparse produces 'required' or 'one of'
-    assert "--agent" in (r.stdout + r.stderr)
+    combined = r.stdout + r.stderr
+    # It reached agent resolution (codex default) and then failed on Feishu creds.
+    assert "FEISHU_APP" in combined or "codex ready" in combined
 
 
 def test_serve_conflict_workspace(tmp_path):
