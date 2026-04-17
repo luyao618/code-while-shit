@@ -184,17 +184,8 @@ class TurnTracker:
         return "".join(self.summary_chunks).strip()
 
 
-class TurnMilestoneUpdate(str):
-    __slots__ = ("milestone", "text")
-
-    milestone: str
-    text: str
-
-    def __new__(cls, milestone: str, text: str) -> "TurnMilestoneUpdate":
-        instance = str.__new__(cls, text)
-        instance.milestone = milestone
-        instance.text = text
-        return instance
+class TurnMilestoneUpdate(ProgressUpdate):
+    pass
 
 
 class CodexAppServerBackend:
