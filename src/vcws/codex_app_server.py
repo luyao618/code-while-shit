@@ -77,7 +77,7 @@ class CodexAppServerClient:
         return self.request(
             "initialize",
             {
-                "clientInfo": {"name": "code-while-shit", "title": "code-while-shit", "version": "0.1.0"},
+                "clientInfo": {"name": "vibe-coding-while-shit", "title": "vibe-coding-while-shit", "version": "0.1.0"},
                 "capabilities": {"experimentalApi": True},
             },
         )
@@ -274,7 +274,7 @@ class CodexAppServerBackend:
                 "approvalPolicy": self._config.approval_policy,
                 "approvalsReviewer": self._config.approvals_reviewer,
                 "sandbox": self._config.sandbox,
-                "serviceName": "code-while-shit",
+                "serviceName": "vibe-coding-while-shit",
                 "experimentalRawEvents": True,
                 "persistExtendedHistory": True,
             },

@@ -1,4 +1,4 @@
-# code-while-shit
+# vibe-coding-while-shit
 
 一个通过飞书 WebSocket 远程驱动本机 Codex 的轻量桥接服务。
 
@@ -37,8 +37,8 @@ export FEISHU_APP_ID=cli_xxx
 export FEISHU_APP_SECRET=xxx
 export CWS_DEFAULT_WORKSPACE=/absolute/path/to/workspace
 
-python3 -m codewhileshit doctor
-python3 -m codewhileshit serve
+python3 -m vcws doctor
+python3 -m vcws serve
 ```
 
 `doctor` 通过时会输出：
@@ -87,8 +87,8 @@ Feishu websocket mode active.
 
 | 命令 | 作用 |
 | --- | --- |
-| `python3 -m codewhileshit doctor` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `lark-oapi` 是否可用 |
-| `python3 -m codewhileshit serve` | 启动飞书 WebSocket bridge |
+| `python3 -m vcws doctor` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `lark-oapi` 是否可用 |
+| `python3 -m vcws serve` | 启动飞书 WebSocket bridge |
 
 ### Feishu / 运行目录
 
@@ -118,7 +118,7 @@ Feishu websocket mode active.
 
 ```bash
 python3 -m pip install -e .
-python3 -m codewhileshit doctor
+python3 -m vcws doctor
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
