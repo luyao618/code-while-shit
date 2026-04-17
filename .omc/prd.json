@@ -1,0 +1,247 @@
+{
+  "task": "vibe-coding-while-shit v0.1 → v0.2: multi-agent support (codex/claude-code/opencode), CLI parameterization (--agent/--workspace), foreground terminal + stop semantics (/cancel=/stop, /kill=/clear)",
+  "plan_source": ".omc/plans/vcws-v0.2-consensus-plan.md",
+  "spec_source": ".omc/specs/deep-interview-v0.2.md",
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "Phase 2a — AgentBackend + AgentTurn Protocol with TurnState enum",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "File src/vcws/agents/__init__.py exists and exports AgentBackend, AgentTurn, CancelNotSupported, create_backend",
+        "File src/vcws/agents/base.py defines AgentBackend Protocol with begin_turn(conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status) -> AgentTurn and kill() methods",
+        "File src/vcws/agents/base.py defines AgentTurn Protocol with: state (TurnState enum: RUNNING|COMPLETED|CANCELLED|KILLED), kill_event (threading.Event per-turn), __enter__/__exit__, run() -> TurnOutcome, cancel(), optional deltas(); __exit__ calls cancel() only when state == RUNNING",
+        "File src/vcws/agents/base.py defines CancelNotSupported(Exception)",
+        "File src/vcws/agents/codex.py exists and contains CodexAgentBackend implementing AgentBackend (ported from src/vcws/codex_app_server.py), with AgentTurn exposing cancel() via JSON-RPC turn/cancel and kill() tearing down subprocess",
+        "File src/vcws/codex_app_server.py becomes a shim that re-exports from vcws.agents.codex, with a module docstring declaring 'not pickle-stable; scheduled removal in 0.3'",
+        "All existing tests still pass (pytest green) — no codex regression",
+        "ruff check src tests clean on new/modified files"
+      ],
+      "dependencies": []
+    },
+    {
+      "id": "US-002",
+      "title": "Phase 2a integration — service.py uses AgentBackend + _active_turns map",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/vcws/service.py imports AgentBackend instead of CodexBackend for type hints",
+        "BridgeService._run_turn wraps execution in `with self.backend.begin_turn(...) as turn:` context manager",
+        "BridgeService maintains a _active_turns: dict[session_key, AgentTurn] guarded by a lock",
+        "Active turn is registered in _active_turns on entry, removed on exit",
+        "Existing regression tests (0.1 behavior) pass — /workspace, /status, approval, input flows unchanged",
+        "ruff check clean"
+      ],
+      "dependencies": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Phase 2b — Per-agent AgentConfig + AppConfig.from_sources with CLI>env precedence",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/vcws/config.py defines AgentConfig base + CodexAgentConfig + ClaudeCodeAgentConfig + OpencodeAgentConfig",
+        "AppConfig.agent: AgentConfig replaces direct CodexConfig coupling",
+        "AppConfig.from_sources(args, env) exists; CLI args override env; conflict on agent/workspace (both set to DIFFERENT values) raises ConfigConflictError which the CLI maps to exit code 2",
+        "tests/test_config_factory.py passes: CLI > env precedence, conflict raises ConfigConflictError, unknown agent_type raises",
+        "Existing codex env vars (CODEX_COMMAND, CODEX_MODEL, etc.) still work unchanged when --agent codex is used",
+        "ruff check clean"
+      ],
+      "dependencies": ["US-001"]
+    },
+    {
+      "id": "US-004",
+      "title": "Phase 2b — CLI flags: --agent (required), --workspace, --allow-auto-approve, --force",
+      "priority": 4,
+      "passes": true,
+      "acceptanceCriteria": [
+        "`python -m vcws serve` without --agent exits non-zero with argparse error listing valid values (codex, claude-code, opencode)",
+        "`python -m vcws serve --agent codex --workspace /x` (with CWS_DEFAULT_WORKSPACE=/y where /x != /y) exits code 2 with a conflict message",
+        "`python -m vcws serve --agent codex` accepts --allow-auto-approve and --force flags",
+        "`python -m vcws doctor --agent claude-code` exits 0 iff claude_agent_sdk importable, else non-zero with pip install hint",
+        "`python -m vcws doctor --agent opencode` exits 0 iff opencode command found on PATH, else non-zero with install hint"
+      ],
+      "dependencies": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Phase 2c — Lockfile with live-PID refusal + stale requires --force/env",
+      "priority": 5,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/vcws/lockfile.py provides acquire(runtime_dir, force=False) -> Lock and release() (idempotent)",
+        "acquire uses O_EXCL atomic write; failing when lockfile exists",
+        "On existing lockfile with LIVE PID (os.kill(pid, 0) succeeds): acquire always raises (no override) with message containing existing PID",
+        "On existing lockfile with STALE PID (ProcessLookupError): acquire refuses unless force=True or env VCWS_TAKEOVER_STALE=1; on takeover, WARN log line contains old PID and lockfile mtime",
+        "release() registered via atexit and SIGINT/SIGTERM handler",
+        "tests/test_lockfile.py passes: empty-dir acquire succeeds; live-PID refused; stale-PID refused without force; stale-PID with force succeeds; release idempotent",
+        "Second `serve` attempt against a live lockfile exits non-zero BEFORE printing 'Feishu websocket mode active.' (asserted via subprocess stdout capture)"
+      ],
+      "dependencies": []
+    },
+    {
+      "id": "US-006",
+      "title": "Phase 2c — Thread-safe TerminalSink with atomic write_line",
+      "priority": 6,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/vcws/terminal_sink.py defines TerminalSink with write_line(str) method",
+        "write_line is guarded by threading.Lock — writes are atomic (no torn output under contention)",
+        "NO_COLOR env disables ANSI codes",
+        "Timestamps formatted as HH:MM:SS.mmm",
+        "tests/test_terminal_sink.py passes: 8 writer threads × 200 writes each produce exactly 1600 well-formed lines matching expected regex with no interleaved bytes; NO_COLOR honored",
+        "Sink is wired into BridgeService.publish_status and adapter-send shims",
+        "ruff check clean"
+      ],
+      "dependencies": []
+    },
+    {
+      "id": "US-007",
+      "title": "Phase 2d — /cancel and /stop routes invoke AgentTurn.cancel",
+      "priority": 7,
+      "passes": true,
+      "acceptanceCriteria": [
+        "BridgeService.handle_message command router handles /cancel and /stop as equivalent BEFORE existing flow",
+        "_handle_cancel looks up active AgentTurn in _active_turns, releases the conversation lock before calling turn.cancel()",
+        "If turn.supports_cancel is False, Feishu reply references the startup capability banner (no silent failure)",
+        "_handle_cancel sends a NEW Feishu message '已停止：用户取消当前 turn'; progress card is NOT mutated (adapter.update_card invoked 0 times during this path)",
+        "Session state transitions to idle; thread_id is preserved (next message reuses it)",
+        "Double-cancel guard: running AgentTurn.run() to normal completion inside `with` block invokes cancel() zero times; turn.state == COMPLETED at __exit__",
+        "tests/test_service_stop_commands.py asserts: turn.cancel() invocation count == 1, send_result == 1 new message, update_card == 0"
+      ],
+      "dependencies": ["US-002"]
+    },
+    {
+      "id": "US-008",
+      "title": "Phase 2d — /kill and /clear routes tear down process and wipe thread bindings",
+      "priority": 8,
+      "passes": true,
+      "acceptanceCriteria": [
+        "BridgeService.handle_message routes /kill and /clear as equivalent BEFORE existing flow",
+        "_handle_kill releases the conversation lock before joining worker; sets per-turn kill_event (not a shared _kill_channel) on the specific active AgentTurn",
+        "After setting kill_event, _handle_kill calls backend.kill(), joins worker with 3s timeout, SIGKILL subprocess on timeout",
+        "StateStore gains wipe_agent_threads() method; _handle_kill invokes it exactly once after backend.kill()",
+        "Per-turn kill_event isolation: in a test with two concurrent AgentTurn instances for conversations A and B, setting turnA's kill_event does NOT touch turnB.kill_event; only thread-id field is mutated for bindings — other session fields untouched",
+        "Feishu receives NEW message '已停止：已重置 agent 进程' (progress card untouched)",
+        "Next inbound message after /kill produces a TurnOutcome with a different thread_id than the pre-kill one (asserted on fake backend)",
+        "tests/test_service_stop_commands.py asserts: backend.kill() invocation count == 1; worker joins within 3.5s via threading.Event.wait; state.wipe_agent_threads called == 1"
+      ],
+      "dependencies": ["US-002", "US-007"]
+    },
+    {
+      "id": "US-009",
+      "title": "Phase 2d — SIGINT/SIGTERM handler graceful shutdown",
+      "priority": 9,
+      "passes": true,
+      "acceptanceCriteria": [
+        "__main__.py installs SIGINT + SIGTERM handler that: sets active turn's kill_event (if any), calls backend.kill(), releases lockfile, exits 0",
+        "After SIGINT, lockfile is removed (file does not exist)",
+        "After SIGINT, agent subprocess PID no longer alive (os.kill(pid, 0) raises ProcessLookupError)",
+        "Test confirms exit code 0 on SIGINT"
+      ],
+      "dependencies": ["US-005", "US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Phase 2e — State migration: codex_thread_id → agent_thread_id",
+      "priority": 10,
+      "passes": true,
+      "acceptanceCriteria": [
+        "StateStore.load renames any codex_thread_id field to agent_thread_id on first load",
+        "Atomic migration: write to tmpfile + rename; keep original as .bak on first migration",
+        "tests/test_state_migration.py passes: 0.1 file with codex_thread_id → 0.2 file with agent_thread_id; .bak preserved; idempotent (second load is a noop)",
+        "A recorded 0.1 bridge-state.json loads without errors under 0.2",
+        "ruff check clean"
+      ],
+      "dependencies": []
+    },
+    {
+      "id": "US-011",
+      "title": "Phase 2e — Claude-code backend via claude-agent-sdk",
+      "priority": 11,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/vcws/agents/claude_code.py implements AgentBackend using claude-agent-sdk",
+        "Missing claude_agent_sdk produces clear ImportError with `pip install vibe-coding-while-shit[claude]` hint",
+        "AgentTurn wraps SDK's async interface via asyncio.run() in a worker thread (matches existing sync service contract)",
+        "SDK text-delta events translate to publish_status(ProgressUpdate('running', delta))",
+        "SDK tool-approval hook routes through existing ApprovalRequest dataclass",
+        "SDK user-input prompts route through existing InputRequest dataclass",
+        "AgentTurn.cancel() sets threading.Event polled at each await boundary AND invokes SDK native cancel if available; cancel has a 3s latency budget — on expiry the backend falls through to kill()",
+        "AgentTurn.kill() drops the SDK session; next turn starts fresh",
+        "ruff check clean"
+      ],
+      "dependencies": ["US-001"]
+    },
+    {
+      "id": "US-012",
+      "title": "Phase 2e — Opencode backend with loopback HTTP + capability banner + allow-auto-approve gate",
+      "priority": 12,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/vcws/agents/opencode.py implements AgentBackend; spawns `opencode serve --port <random>` on 127.0.0.1 only",
+        "If --auth-token is supported by opencode, per-run token is passed and verified; else loopback-only binding + process-owner check (getpeereid/LOCAL_PEERCRED on macOS, SO_PEERCRED on Linux)",
+        "AgentTurn.supports_cancel is probed LAZILY on first cancel attempt and cached; capability banner states '/cancel capability will be detected on first use'",
+        "AgentTurn.supports_approval is always False; if config.allow_auto_approve is False, tool-approval callback returns deny AND Feishu receives explanatory message",
+        "If config.allow_auto_approve is True, tool-approval callback approves automatically with warning message",
+        "Startup capability banner is emitted to Feishu AND terminal sink: 'opencode 模式：审批不支持（需 --allow-auto-approve 才允许工具调用）；/cancel 能力将在首次使用时探测；建议用 /kill 终止'",
+        "If opencode subprocess fails to come up across 3 retries with exponential backoff, serve --agent opencode exits non-zero with diagnostic message",
+        "doctor --agent opencode performs the same dry-run check",
+        "ruff check clean"
+      ],
+      "dependencies": ["US-001"]
+    },
+    {
+      "id": "US-013",
+      "title": "Parity contract test across all three backends",
+      "priority": 13,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tests/test_agent_parity.py defines a parametrized scenario (start turn → receive 2 deltas → cancel → outcome is interrupted) that runs against fake subclasses of all three real backends (codex, claude-code, opencode)",
+        "All three backends satisfy the parity contract (with opencode's cancel going through lazy-probe first)",
+        "Test runs in pytest and is green"
+      ],
+      "dependencies": ["US-001", "US-011", "US-012"]
+    },
+    {
+      "id": "US-014",
+      "title": "0.1 regression trace replay test",
+      "priority": 14,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tests/test_regression_0_1.py replays a recorded 0.1 Feishu trace under --agent codex",
+        "Assertions: /workspace, /status, approval card flow, input card flow — all produce Feishu API calls identical modulo timestamps/IDs to the recorded 0.1 trace",
+        "Test is green"
+      ],
+      "dependencies": ["US-002", "US-007", "US-008"]
+    },
+    {
+      "id": "US-015",
+      "title": "Phase 2f — Version bump, optional deps, README, CHANGELOG, rollback notes",
+      "priority": 15,
+      "passes": true,
+      "acceptanceCriteria": [
+        "pyproject.toml version is '0.2.0'",
+        "pyproject.toml [project.optional-dependencies] declares `claude = [\"claude-agent-sdk>=<pinned>\"]` (pinned to a specific available version)",
+        "pyproject.toml mentions opencode as a binary dep in README",
+        "README.md updated: new --agent/--workspace/--allow-auto-approve/--force CLI, /cancel=/stop and /kill=/clear commands, per-agent capability table (codex=full, claude-code=full, opencode=reduced), rollback guidance",
+        "CHANGELOG.md exists and documents 0.2 with a BREAKING CHANGES block (CLI now requires --agent; state field rename from codex_thread_id to agent_thread_id)",
+        "CHANGELOG.md includes explicit rollback instructions (`pip install vibe-coding-while-shit==0.1.0`; .bak state file preserved)"
+      ],
+      "dependencies": ["US-001", "US-002", "US-003", "US-004", "US-005", "US-006", "US-007", "US-008", "US-009", "US-010", "US-011", "US-012"]
+    },
+    {
+      "id": "US-016",
+      "title": "Final regression: full pytest + ruff green across entire project",
+      "priority": 16,
+      "passes": true,
+      "acceptanceCriteria": [
+        "`pytest` runs all tests and exits 0 with no skips of previously-running tests",
+        "`ruff check src tests` exits 0",
+        "No LSP diagnostic errors on any touched file"
+      ],
+      "dependencies": ["US-013", "US-014", "US-015"]
+    }
+  ]
+}

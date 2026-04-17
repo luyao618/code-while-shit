@@ -1,32 +1,39 @@
-# vibe-coding-while-shit
+# vibe-coding-while-shit — v0.2
 
-一个通过飞书 WebSocket 远程驱动本机 Codex 的轻量桥接服务。
+通过飞书 WebSocket 远程驱动本机 AI 编程助手（codex / claude-code / opencode）的轻量桥接服务。
 
 ## 1. 项目概览
 
-它做三件事：
+v0.2 引入多 Agent 支持。你可以在同一套飞书入口下选择三种 Agent 后端之一来驱动本地编程任务：
+
+- **codex** — JSON-RPC app-server，完整能力（默认）
+- **claude-code** — 通过 `claude-agent-sdk` 驱动，完整能力
+- **opencode** — loopback HTTP 模式，能力受限（审批需要 `--allow-auto-approve`）
+
+服务做三件事：
 
 - 接收飞书消息和交互事件
-- 把会话绑定到工作目录和 Codex thread
+- 把会话绑定到工作目录和 Agent thread
 - 在需要时把确认/补充信息回流给飞书
 
-它是一个单机、单飞书入口的 MVP 形态，适合先把“人在飞书里操作 Codex”这条链路跑稳。
+它是一个单机、单飞书入口的 MVP 形态，适合把"人在飞书里操作 AI 编程助手"这条链路跑稳。
 
 ## 2. 架构概览
 
 - **Feishu WebSocket gateway**：处理飞书事件入口
 - **Bridge service**：维护会话、工作目录、状态、恢复信息
-- **Codex app-server 子进程**：由 `CODEX_COMMAND` + `CODEX_APP_SERVER_ARGS` 启动
+- **Agent 后端**：与所选 Agent 进程通信（codex / claude-code / opencode 均可作为后端）
 
-运行时状态默认写到 `.omx/runtime/bridge-state.json`。
+Bridge 是 Agent-agnostic 的；codex 是三个后端之一。运行时状态默认写到 `.omx/runtime/bridge-state.json`。
 
 ## 3. 前置条件
 
 - Python 3.11+
-- `codex` 命令可用，或用 `CODEX_COMMAND` 指向你的 Codex 可执行文件
+- 所选 Agent 命令可用（`codex`、`claude`、`opencode`）
 - 一个可写的本地工作目录
 - 飞书开放平台应用的 **App ID** 和 **App Secret**
 - 已安装依赖（`lark-oapi` 会随 `pip install -e .` 安装）
+- 如果使用 claude-code：`pip install "vibe-coding-while-shit[claude]"`
 
 ## 4. Quick Start
 
@@ -38,7 +45,14 @@ export FEISHU_APP_SECRET=xxx
 export CWS_DEFAULT_WORKSPACE=/absolute/path/to/workspace
 
 python3 -m vcws doctor
-python3 -m vcws serve
+# 使用 codex
+python3 -m vcws serve --agent codex --workspace .
+
+# 使用 claude-code
+python3 -m vcws serve --agent claude-code --workspace .
+
+# 使用 opencode（审批需要 --allow-auto-approve）
+python3 -m vcws serve --agent opencode --workspace . --allow-auto-approve
 ```
 
 `doctor` 通过时会输出：
@@ -68,13 +82,13 @@ Feishu websocket mode active.
 ## 6. 日常使用 / 操作流程
 
 1. 先跑 `doctor`
-2. 再跑 `serve`
-3. 直接给机器人发消息，启动一个 Codex 任务
-4. 后续消息会继续沿用当前会话绑定的 Codex thread
-5. Codex 要你补充信息时，直接回复文本
-6. Codex 要你确认时，在卡片里完成确认/拒绝
+2. 再跑 `serve --agent <agent>`
+3. 直接给机器人发消息，启动一个 Agent 任务
+4. 后续消息会继续沿用当前会话绑定的 Agent thread
+5. Agent 要你补充信息时，直接回复文本
+6. Agent 要你确认时，在卡片里完成确认/拒绝
 7. 用 `/workspace <path>` 切换当前会话的工作目录
-8. 用 `/status` 查看当前 transport、会话、工作目录、Codex thread 和最近事件
+8. 用 `/status` 查看当前 transport、会话、工作目录、Agent thread 和最近事件
 
 补充：
 
@@ -87,8 +101,45 @@ Feishu websocket mode active.
 
 | 命令 | 作用 |
 | --- | --- |
-| `python3 -m vcws doctor` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `lark-oapi` 是否可用 |
-| `python3 -m vcws serve` | 启动飞书 WebSocket bridge |
+| `python3 -m vcws doctor [--agent X]` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`lark-oapi` 及指定 Agent 的依赖是否可用 |
+| `python3 -m vcws serve --agent {codex,claude-code,opencode} [--workspace PATH] [--allow-auto-approve] [--force]` | 启动飞书 WebSocket bridge |
+
+### 停止命令 / Stop commands
+
+| 命令 | 作用 |
+| --- | --- |
+| `/cancel` 或 `/stop` | 打断当前 turn，保留 thread |
+| `/kill` 或 `/clear` | 硬杀 Agent 进程，下一条消息开新 thread |
+| Ctrl+C | 优雅退出整个服务 |
+
+### Agent 能力对比 / Capability matrix
+
+| Agent | 审批卡片 | 增量打印 | /cancel | /kill |
+|-------|----------|----------|---------|-------|
+| codex | ✅ | ✅ | ✅ | ✅ |
+| claude-code | ✅ | ✅ | ✅ | ✅ |
+| opencode | ⚠️ 需要 --allow-auto-approve | ✅ | ⚠️ 首次使用时探测 | ✅ |
+
+### 并发约束 / Single-instance invariant
+
+一个飞书 bot 一次只能有一个 `serve` 进程，通过 `.omx/runtime/serve.lock` 强制。
+
+- 第二个 `serve` 启动会被拒绝，并打印现有进程的 PID。
+- Stale lockfile 需要 `--force` 或 `VCWS_TAKEOVER_STALE=1` 才能接管。
+
+### 升级与回滚 / Upgrade & rollback
+
+**升级：**
+```bash
+pip install vibe-coding-while-shit==0.2.0
+```
+状态文件会自动迁移；`bridge-state.json.bak` 保留作为回退备份。
+
+**回滚：**
+```bash
+pip install vibe-coding-while-shit==0.1.0
+```
+0.1 读不了新的 `agent_thread_id` 字段，会当作新 thread 开始；不影响正常运行。
 
 ### Feishu / 运行目录
 
@@ -126,9 +177,10 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 - 目前只支持 **Feishu WebSocket** 入口，不支持 webhook 主路径
 - `serve` 启动前必须有 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
+- `serve` 现在**要求** `--agent` 参数；不传会以非零退出
 - 如果 `FEISHU_ALLOWED_USERS` 被设置，名单外用户会被拒绝
 - 如果 `/status` 里显示没有活跃 thread，说明这个会话还没真正开始过任务
-- 重启恢复会沿用同一会话的 Codex thread；它不是“回到中断 RPC 的精确现场”
+- 重启恢复会沿用同一会话的 Agent thread；它不是"回到中断 RPC 的精确现场"
 - `CWS_RUNTIME_DIR` 和 `CWS_DEFAULT_WORKSPACE` 必须可写
-- 如果 `doctor` 失败，先看是否缺少 `lark-oapi`、`FEISHU_APP_ID` 或 `FEISHU_APP_SECRET`
+- 如果 `doctor` 失败，先看是否缺少依赖、`FEISHU_APP_ID` 或 `FEISHU_APP_SECRET`
 - 如果 `serve` 先打印 active，随后又报 Feishu 连接错误，优先检查 WebSocket 订阅、`FEISHU_DOMAIN` / `FEISHU_BASE_URL` 和网络可达性
