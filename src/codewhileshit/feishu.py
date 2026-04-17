@@ -219,11 +219,18 @@ class FeishuAdapter(ChannelAdapter):
             return self._client.send_card(conversation, card, reply_to_message_id=anchor)
         except RuntimeError:
             fallback = f"{update.summary}\n{update.detail}" if update.detail else update.summary
-            self._client.send_text(conversation, fallback, reply_to_message_id=reply_to_message_id or source_message_id)
+            try:
+                self._client.send_text(
+                    conversation,
+                    fallback,
+                    reply_to_message_id=reply_to_message_id or source_message_id,
+                )
+            except RuntimeError:
+                return None
             return None
 
     def request_approval(self, conversation: ConversationRef, prompt: ApprovalPrompt) -> None:
-        self._client.send_card(conversation, _build_approval_card(prompt, status="pending"))
+        self._client.send_card(conversation, _build_approval_card(prompt, conversation=conversation, status="pending"))
 
     def resolve_approval(
         self,
@@ -237,7 +244,10 @@ class FeishuAdapter(ChannelAdapter):
         if not message_id:
             return False
         try:
-            return self._client.update_card(message_id, _build_approval_card(prompt, status=status, detail=detail))
+            return self._client.update_card(
+                message_id,
+                _build_approval_card(prompt, conversation=conversation, status=status, detail=detail),
+            )
         except RuntimeError:
             return False
 
@@ -515,6 +525,7 @@ def _progress_style(milestone: ProgressMilestone) -> tuple[str, str, str]:
 def _build_approval_card(
     prompt: ApprovalPrompt,
     *,
+    conversation: ConversationRef,
     status: ApprovalCardStatus,
     detail: str | None = None,
 ) -> dict[str, Any]:
@@ -534,8 +545,8 @@ def _build_approval_card(
     if detail:
         body.append({"tag": "markdown", "content": f"**处理结果**\n{detail}"})
     if status == "pending":
-        approve_value = _approval_action_value(prompt, decision="approve")
-        deny_value = _approval_action_value(prompt, decision="deny")
+        approve_value = _approval_action_value(prompt, conversation=conversation, decision="approve")
+        deny_value = _approval_action_value(prompt, conversation=conversation, decision="deny")
         body.extend(
             [
                 {
@@ -585,13 +596,18 @@ def _build_approval_card(
     }
 
 
-def _approval_action_value(prompt: ApprovalPrompt, *, decision: str) -> dict[str, Any]:
+def _approval_action_value(
+    prompt: ApprovalPrompt,
+    *,
+    conversation: ConversationRef,
+    decision: str,
+) -> dict[str, Any]:
     return {
         "request_id": prompt.request_id,
         "decision": decision,
-        "conversation_id": prompt.request_id and None,
-        "account_id": "default",
-        "thread_id": None,
+        "conversation_id": conversation.conversation_id,
+        "account_id": conversation.account_id,
+        "thread_id": conversation.thread_id,
         "codex_thread_id": prompt.codex_thread_id,
         "codex_turn_id": prompt.codex_turn_id,
         "codex_item_id": prompt.codex_item_id,
