@@ -9,6 +9,9 @@ from typing import Any
 
 from .models import ConversationRef, ConversationSession, FeishuTransportState, PendingInteraction, WorkspaceBinding
 
+SESSION_EXTRA_FIELDS = ("progress_message_id", "progress_milestone")
+PENDING_EXTRA_FIELDS = ("approval_message_id",)
+
 
 @dataclass(frozen=True)
 class StateSnapshot:
@@ -50,17 +53,22 @@ class StateStore:
                     thread_id=conversation.thread_id,
                     active_workspace=default_workspace,
                 )
+                self._ensure_session_extras(session)
                 self._sessions[key] = session
                 self._bindings[conversation.binding_key(default_workspace)] = WorkspaceBinding(
                     session_key=key,
                     workspace_path=default_workspace,
                 )
                 self._save()
+            else:
+                self._ensure_session_extras(session)
             return session
 
     def save_session(self, session: ConversationSession) -> None:
         session.active_workspace = self._normalize_workspace(session.active_workspace)
         with self._lock:
+            existing = self._sessions.get(session.key)
+            self._ensure_session_extras(session, existing)
             self._sessions[session.key] = session
             self._bindings.setdefault(
                 f"{session.key}@{session.active_workspace}",
@@ -100,6 +108,8 @@ class StateStore:
 
     def set_pending(self, pending: PendingInteraction) -> None:
         with self._lock:
+            existing = self._pending.get(pending.request_id)
+            self._ensure_pending_extras(pending, existing)
             self._pending[pending.request_id] = pending
             session = self._sessions.get(pending.session_key)
             if session:
@@ -175,7 +185,7 @@ class StateStore:
                 session.last_status = status
                 session.recovery_note = None
             self._save()
-            return PendingInteraction(
+            resolved = PendingInteraction(
                 request_id=pending.request_id,
                 kind=pending.kind,
                 session_key=pending.session_key,
@@ -190,6 +200,8 @@ class StateStore:
                 metadata=dict(pending.metadata),
                 status=status,
             )
+            self._ensure_pending_extras(resolved, pending)
+            return resolved
 
     def pending_for_conversation(self, conversation: ConversationRef) -> PendingInteraction | None:
         with self._lock:
@@ -224,7 +236,7 @@ class StateStore:
             return
         payload = json.loads(self._path.read_text(encoding="utf-8"))
         self._sessions = {
-            key: ConversationSession.from_dict(value)
+            key: self._session_from_payload(value)
             for key, value in payload.get("sessions", {}).items()
         }
         self._bindings = {
@@ -232,7 +244,7 @@ class StateStore:
             for key, value in payload.get("bindings", {}).items()
         }
         self._pending = {
-            key: PendingInteraction.from_dict(value)
+            key: self._pending_from_payload(value)
             for key, value in payload.get("pending", {}).items()
         }
         transport_payload = payload.get("transport")
@@ -243,12 +255,58 @@ class StateStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload: dict[str, Any] = {
             "updated_at": datetime.now(UTC).isoformat(),
-            "sessions": {key: session.to_dict() for key, session in self._sessions.items()},
+            "sessions": {key: self._session_to_payload(session) for key, session in self._sessions.items()},
             "bindings": {key: binding.to_dict() for key, binding in self._bindings.items()},
-            "pending": {key: pending.to_dict() for key, pending in self._pending.items()},
+            "pending": {key: self._pending_to_payload(pending) for key, pending in self._pending.items()},
             "transport": self._transport.to_dict(),
         }
         self._path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _ensure_session_extras(session: ConversationSession, source: ConversationSession | None = None) -> None:
+        for field in SESSION_EXTRA_FIELDS:
+            if hasattr(session, field):
+                continue
+            setattr(session, field, getattr(source, field, None) if source is not None else None)
+
+    @staticmethod
+    def _ensure_pending_extras(pending: PendingInteraction, source: PendingInteraction | None = None) -> None:
+        for field in PENDING_EXTRA_FIELDS:
+            if hasattr(pending, field):
+                continue
+            setattr(pending, field, getattr(source, field, None) if source is not None else None)
+
+    @classmethod
+    def _session_to_payload(cls, session: ConversationSession) -> dict[str, Any]:
+        payload = session.to_dict()
+        cls._ensure_session_extras(session)
+        for field in SESSION_EXTRA_FIELDS:
+            payload[field] = getattr(session, field, None)
+        return payload
+
+    @classmethod
+    def _session_from_payload(cls, payload: dict[str, Any]) -> ConversationSession:
+        base = {key: value for key, value in payload.items() if key not in SESSION_EXTRA_FIELDS}
+        session = ConversationSession.from_dict(base)
+        for field in SESSION_EXTRA_FIELDS:
+            setattr(session, field, payload.get(field))
+        return session
+
+    @classmethod
+    def _pending_to_payload(cls, pending: PendingInteraction) -> dict[str, Any]:
+        payload = pending.to_dict()
+        cls._ensure_pending_extras(pending)
+        for field in PENDING_EXTRA_FIELDS:
+            payload[field] = getattr(pending, field, None)
+        return payload
+
+    @classmethod
+    def _pending_from_payload(cls, payload: dict[str, Any]) -> PendingInteraction:
+        base = {key: value for key, value in payload.items() if key not in PENDING_EXTRA_FIELDS}
+        pending = PendingInteraction.from_dict(base)
+        for field in PENDING_EXTRA_FIELDS:
+            setattr(pending, field, payload.get(field))
+        return pending
 
     @staticmethod
     def _normalize_workspace(workspace_path: str) -> str:
