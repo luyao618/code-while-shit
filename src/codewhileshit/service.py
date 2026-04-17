@@ -86,7 +86,8 @@ class BridgeService:
         filtered = {
             key: value
             for key, value in kwargs.items()
-            if value is not None and (supports_var_kwargs or key in signature.parameters)
+            if (supports_var_kwargs or key in signature.parameters)
+            and (value is not None or key in signature.parameters)
         }
         return method(*args, **filtered)
 
