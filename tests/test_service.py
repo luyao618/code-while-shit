@@ -7,9 +7,18 @@ from pathlib import Path
 
 from codewhileshit.channels import ApprovalPrompt, ChannelAdapter, InputPrompt
 from codewhileshit.config import AppConfig, CodexConfig, FeishuConfig
-from codewhileshit.models import Actor, ApprovalRequest, ConversationRef, InboundMessage, InputRequest, PendingInteraction, PendingSubmission, TurnOutcome, WorkspaceBinding
+from codewhileshit.models import Actor, ApprovalRequest, ConversationRef, ConversationSession, InboundMessage, InputRequest, PendingInteraction, PendingSubmission, TurnOutcome, WorkspaceBinding
 from codewhileshit.service import BridgeService
 from codewhileshit.state import StateStore
+
+HAS_PROGRESS_SURFACE_STATE = all(
+    field in ConversationSession.__dataclass_fields__
+    for field in ("progress_message_id", "progress_milestone")
+)
+HAS_APPROVAL_MESSAGE_HANDLE = (
+    "approval_message_id" in PendingInteraction.__dataclass_fields__
+    and "open_message_id" in PendingSubmission.__dataclass_fields__
+)
 
 
 class FakeAdapter(ChannelAdapter):
@@ -413,3 +422,93 @@ class AdditionalBridgeServiceTests(unittest.TestCase):
             service.state.set_pending(pending)
             service.handle_submission(PendingSubmission(conversation, Actor("guest"), "req-x", "approval", decision="approve"))
             self.assertIn("allowlist", adapter.results[-1][1])
+
+    @unittest.skipUnless(
+        HAS_APPROVAL_MESSAGE_HANDLE,
+        "Approval-card message correlation is not available yet",
+    )
+    def test_submission_with_matching_open_message_id_is_accepted(self) -> None:
+        conversation = ConversationRef("feishu", "default", "chat")
+        pending = PendingInteraction(
+            request_id="approval-4",
+            kind="approval",
+            session_key=conversation.session_key,
+            conversation=conversation,
+            title="Approve",
+            prompt="please approve",
+            created_at="2026-04-16T00:00:00+00:00",
+            approval_message_id="om_approval_1",
+        )
+        submission = PendingSubmission(
+            conversation=conversation,
+            actor=Actor("user-1"),
+            request_id="approval-4",
+            kind="approval",
+            decision="approve",
+            open_message_id="om_approval_1",
+        )
+
+        self.assertTrue(BridgeService._submission_matches_pending(submission, pending))
+
+    @unittest.skipUnless(
+        HAS_APPROVAL_MESSAGE_HANDLE,
+        "Approval-card message correlation is not available yet",
+    )
+    def test_submission_with_mismatched_open_message_id_is_rejected(self) -> None:
+        conversation = ConversationRef("feishu", "default", "chat")
+        pending = PendingInteraction(
+            request_id="approval-5",
+            kind="approval",
+            session_key=conversation.session_key,
+            conversation=conversation,
+            title="Approve",
+            prompt="please approve",
+            created_at="2026-04-16T00:00:00+00:00",
+            approval_message_id="om_approval_1",
+        )
+        submission = PendingSubmission(
+            conversation=conversation,
+            actor=Actor("user-1"),
+            request_id="approval-5",
+            kind="approval",
+            decision="approve",
+            open_message_id="om_other",
+        )
+
+        self.assertFalse(BridgeService._submission_matches_pending(submission, pending))
+
+    @unittest.skipUnless(
+        HAS_PROGRESS_SURFACE_STATE and HAS_APPROVAL_MESSAGE_HANDLE,
+        "Persisted turn UX handles are not available yet",
+    )
+    def test_state_store_round_trip_preserves_turn_ux_handles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = build_config(tmp)
+            store = StateStore(config.state_file)
+            conversation = ConversationRef("feishu", "default", "chat")
+            session = store.ensure_session(conversation, str(config.default_workspace))
+            session.progress_message_id = "om_progress_1"
+            session.progress_milestone = "waiting_approval"
+            store.save_session(session)
+            store.set_pending(
+                PendingInteraction(
+                    request_id="approval-6",
+                    kind="approval",
+                    session_key=session.key,
+                    conversation=conversation,
+                    title="Approve",
+                    prompt="please approve",
+                    created_at="2026-04-16T00:00:00+00:00",
+                    approval_message_id="om_approval_1",
+                )
+            )
+
+            reloaded = StateStore(config.state_file)
+            recovered_session = reloaded.get_session(conversation)
+            recovered_pending = reloaded.get_pending("approval-6")
+
+            self.assertIsNotNone(recovered_session)
+            self.assertIsNotNone(recovered_pending)
+            self.assertEqual(recovered_session.progress_message_id, "om_progress_1")
+            self.assertEqual(recovered_session.progress_milestone, "waiting_approval")
+            self.assertEqual(recovered_pending.approval_message_id, "om_approval_1")

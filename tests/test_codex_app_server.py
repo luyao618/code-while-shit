@@ -7,6 +7,13 @@ from codewhileshit.codex_app_server import CodexAppServerBackend
 from codewhileshit.config import CodexConfig
 from codewhileshit.models import ConversationRef
 
+try:
+    from codewhileshit.models import ProgressUpdate
+except ImportError:  # pragma: no cover - feature-gated below
+    ProgressUpdate = None
+
+HAS_PROGRESS_UPDATES = ProgressUpdate is not None
+
 
 class FakeClient:
     def __init__(self) -> None:
@@ -82,3 +89,30 @@ class CodexBackendTests(unittest.TestCase):
         observed_statuses = list(statuses.queue)
         self.assertIn("处理中：Codex 正在执行任务。", observed_statuses)
         self.assertIn("等待确认：Codex 需要你的确认。", observed_statuses)
+
+    @unittest.skipUnless(
+        HAS_PROGRESS_UPDATES,
+        "Normalized progress updates are not available yet",
+    )
+    def test_process_turn_emits_normalized_progress_updates(self) -> None:
+        backend = CodexAppServerBackend(
+            CodexConfig("codex", ("app-server",), "gpt-5.4", "on-request", "user", "workspace-write", None),
+            client=FakeClient(),
+        )
+        statuses: queue.Queue[ProgressUpdate] = queue.Queue()
+        backend.process_turn(
+            conversation=ConversationRef("feishu", "default", "chat"),
+            workspace_path="/tmp/project",
+            prompt="build a sorter",
+            existing_thread_id=None,
+            request_approval=lambda request: "approve",
+            request_input=lambda request: "python",
+            publish_status=statuses.put,
+        )
+
+        observed = list(statuses.queue)
+        self.assertGreaterEqual(len(observed), 2)
+        self.assertTrue(all(isinstance(update, ProgressUpdate) for update in observed[:2]))
+        self.assertEqual(observed[0].milestone, "running")
+        self.assertEqual(observed[1].milestone, "waiting_approval")
+        self.assertTrue(all(update.summary for update in observed[:2]))

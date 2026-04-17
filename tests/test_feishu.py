@@ -5,6 +5,7 @@ import unittest
 
 from lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1
 from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTrigger
+from codewhileshit.models import PendingSubmission
 
 from codewhileshit.feishu import (
     FeishuWebSocketGateway,
@@ -12,6 +13,8 @@ from codewhileshit.feishu import (
     _parse_card_action_submission,
     _parse_message_event,
 )
+
+HAS_APPROVAL_MESSAGE_HANDLE = "open_message_id" in PendingSubmission.__dataclass_fields__
 
 
 class FeishuWebSocketParsingTests(unittest.TestCase):
@@ -63,6 +66,31 @@ class FeishuWebSocketParsingTests(unittest.TestCase):
         self.assertEqual(submission.codex_thread_id, "thread-1")
         self.assertEqual(submission.codex_turn_id, "turn-1")
         self.assertEqual(submission.codex_item_id, "item-1")
+
+    @unittest.skipUnless(
+        HAS_APPROVAL_MESSAGE_HANDLE,
+        "Feishu 0.1 approval-card message correlation is not available yet",
+    )
+    def test_parses_card_action_submission_open_message_id(self) -> None:
+        event = P2CardActionTrigger(
+            {
+                "header": {"event_id": "evt-2b"},
+                "event": {
+                    "operator": {"open_id": "ou_123"},
+                    "action": {
+                        "value": {
+                            "request_id": "req-1",
+                            "decision": "approve",
+                            "conversation_id": "chat_1",
+                        }
+                    },
+                    "context": {"open_chat_id": "chat_1", "open_message_id": "om_approval_1"},
+                },
+            }
+        )
+        submission = _parse_card_action_submission(event)
+        self.assertIsNotNone(submission)
+        self.assertEqual(submission.open_message_id, "om_approval_1")
 
     def test_extract_text_falls_back_for_plain_content(self) -> None:
         self.assertEqual(_extract_text(json.dumps({"text": "hello"})), "hello")
