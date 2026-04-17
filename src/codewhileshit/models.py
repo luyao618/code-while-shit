@@ -7,6 +7,8 @@ SessionState = Literal["idle", "running", "waiting_approval", "waiting_input", "
 PendingKind = Literal["approval", "user_input"]
 SubmissionDecision = Literal["approve", "deny"]
 TransportStatus = Literal["stopped", "connecting", "connected", "reconnecting", "failed"]
+ProgressMilestone = Literal["accepted", "running", "waiting_approval", "waiting_input", "completed", "failed"]
+ApprovalCardStatus = Literal["pending", "approved", "denied", "expired", "duplicate", "error"]
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,14 @@ class PendingSubmission:
     codex_thread_id: str | None = None
     codex_turn_id: str | None = None
     codex_item_id: str | None = None
+    open_message_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ProgressUpdate:
+    milestone: ProgressMilestone
+    summary: str
+    detail: str | None = None
 
 
 @dataclass
@@ -65,6 +75,8 @@ class ConversationSession:
     pending_request_id: str | None = None
     last_status: str | None = None
     last_source_message_id: str | None = None
+    progress_message_id: str | None = None
+    progress_milestone: ProgressMilestone | None = None
     recovery_note: str | None = None
 
     @property
@@ -146,6 +158,7 @@ class PendingInteraction:
     codex_thread_id: str | None = None
     codex_turn_id: str | None = None
     codex_item_id: str | None = None
+    approval_message_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     status: str = "pending"
 
