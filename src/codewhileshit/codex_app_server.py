@@ -184,6 +184,12 @@ class TurnTracker:
         return "".join(self.summary_chunks).strip()
 
 
+@dataclass(frozen=True)
+class TurnMilestoneUpdate:
+    milestone: str
+    text: str
+
+
 class CodexAppServerBackend:
     def __init__(self, config: CodexConfig, client: CodexAppServerClient | None = None):
         self._config = config
@@ -219,7 +225,7 @@ class CodexAppServerBackend:
                 lambda notification: self._handle_notification(notification, tracker, publish_status)
             )
             try:
-                publish_status("处理中：Codex 正在执行任务。")
+                publish_status(TurnMilestoneUpdate("thinking", "正在思考：Codex 正在分析你的请求。"))
                 turn_result = self._client.request(
                     "turn/start",
                     {
@@ -293,10 +299,11 @@ class CodexAppServerBackend:
             tracker.append_text(str(params.get("delta") or ""))
             return
         if method in {"thread/statusChanged", "turn/statusChanged"}:
-            status_text = self._status_text_from_notification(params)
-            if status_text and status_text != tracker.last_status:
-                tracker.last_status = status_text
-                publish_status(status_text)
+            update = self._status_update_from_notification(params)
+            status_key = f"{update.milestone}:{update.text}" if update else None
+            if update and status_key != tracker.last_status:
+                tracker.last_status = status_key
+                publish_status(update)
             return
         if method == "turn/completed":
             turn = params.get("turn") or {}
@@ -314,7 +321,7 @@ class CodexAppServerBackend:
             )
             tracker.completion.set()
 
-    def _status_text_from_notification(self, params: JsonDict) -> str | None:
+    def _status_update_from_notification(self, params: JsonDict) -> TurnMilestoneUpdate | None:
         status = (
             params.get("status")
             or (params.get("thread") or {}).get("status")
@@ -324,15 +331,15 @@ class CodexAppServerBackend:
             return None
         normalized = status.strip().lower()
         if normalized in {"running", "in_progress", "working"}:
-            return "处理中：Codex 正在执行任务。"
+            return TurnMilestoneUpdate("running", "正在处理：Codex 正在执行任务。")
         if normalized in {"waiting_input", "needs_input"}:
-            return "等待补充信息：Codex 需要你的进一步说明。"
+            return TurnMilestoneUpdate("waiting_input", "等待补充信息：Codex 需要你的进一步说明。")
         if normalized in {"waiting_approval", "needs_approval"}:
-            return "等待确认：Codex 需要你的确认。"
+            return TurnMilestoneUpdate("waiting_approval", "等待确认：Codex 需要你的确认。")
         if normalized in {"completed", "done"}:
-            return "已完成：Codex 已结束当前执行。"
+            return TurnMilestoneUpdate("completed", "已完成：Codex 已结束当前执行。")
         if normalized in {"failed", "error"}:
-            return "失败：Codex 执行未完成。"
+            return TurnMilestoneUpdate("failed", "失败：Codex 执行未完成。")
         return None
 
     def _extract_summary(self, turn: JsonDict, fallback: str) -> str:
@@ -361,7 +368,7 @@ class CodexAppServerBackend:
         if tracker.turn_id and params.get("turnId") and params.get("turnId") != tracker.turn_id:
             return None
         if method == "item/tool/requestUserInput":
-            publish_status("等待补充信息：Codex 需要你的进一步说明。")
+            publish_status(TurnMilestoneUpdate("waiting_input", "等待补充信息：Codex 需要你的进一步说明。"))
             input_request = InputRequest(
                 request_id=str(request["id"]),
                 conversation=conversation,
@@ -393,7 +400,7 @@ class CodexAppServerBackend:
                 permissions=dict(params.get("permissions") or {}),
             )
             decision = request_approval(approval)
-            publish_status("处理中：已收到你的确认，继续执行。")
+            publish_status(TurnMilestoneUpdate("running", "正在处理：已收到你的确认，继续执行。"))
             return self._approval_response(method, params, decision)
         return None
 
