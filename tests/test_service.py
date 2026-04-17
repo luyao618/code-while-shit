@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -27,6 +28,7 @@ class FakeAdapter(ChannelAdapter):
         self.results = []
         self.approvals = []
         self.inputs = []
+        self.approval_message_id: str | None = None
 
     def send_status(self, conversation: ConversationRef, text: str) -> None:
         self.statuses.append((conversation, text))
@@ -34,8 +36,9 @@ class FakeAdapter(ChannelAdapter):
     def send_result(self, conversation: ConversationRef, text: str) -> None:
         self.results.append((conversation, text))
 
-    def request_approval(self, conversation: ConversationRef, prompt: ApprovalPrompt) -> None:
+    def request_approval(self, conversation: ConversationRef, prompt: ApprovalPrompt) -> str | None:
         self.approvals.append((conversation, prompt))
+        return self.approval_message_id
 
     def request_user_input(self, conversation: ConversationRef, prompt: InputPrompt) -> None:
         self.inputs.append((conversation, prompt))
@@ -137,6 +140,47 @@ class BridgeServiceTests(unittest.TestCase):
 
 
 class AdditionalBridgeServiceTests(unittest.TestCase):
+    def test_request_approval_persists_adapter_message_handle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = build_config(tmp)
+            store = StateStore(config.state_file)
+            adapter = FakeAdapter()
+            adapter.approval_message_id = "om_approval_1"
+            service = BridgeService(config, adapter, backend=FakeBackend(), state_store=store)
+            conversation = ConversationRef("feishu", "default", "chat")
+            session = store.ensure_session(conversation, str(config.default_workspace))
+            observed: dict[str, str] = {}
+
+            def respond() -> None:
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    pending = store.get_pending("approval-1")
+                    if pending is not None and pending.approval_message_id == "om_approval_1":
+                        observed["approval_message_id"] = pending.approval_message_id
+                        break
+                    time.sleep(0.01)
+                service.handle_message(InboundMessage(conversation, Actor("user-1"), "deny"))
+
+            threading.Thread(target=respond, daemon=True).start()
+            decision = service._request_approval(
+                session,
+                Actor("user-1"),
+                ApprovalRequest(
+                    "approval-1",
+                    conversation,
+                    str(config.default_workspace),
+                    "item/commandExecution/requestApproval",
+                    command="git push --force",
+                    cwd=str(config.default_workspace),
+                    item_id="cmd-1",
+                    turn_id="turn-1",
+                    codex_thread_id="thread-1",
+                ),
+            )
+
+            self.assertEqual(decision, "deny")
+            self.assertEqual(observed["approval_message_id"], "om_approval_1")
+
     def test_allowlist_rejects_unknown_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = build_config(tmp)

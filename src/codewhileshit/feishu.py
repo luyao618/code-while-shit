@@ -13,15 +13,33 @@ from typing import Any, Callable
 
 from .channels import ApprovalPrompt, ChannelAdapter, InputPrompt
 from .config import AppConfig, FeishuConfig
+from .feishu_cards import _build_approval_card, _build_progress_card
+from .feishu_events import (
+    _card_action_dedupe_key,
+    _extract_text,
+    _message_dedupe_key,
+    _parse_card_action_submission,
+    _parse_message_event,
+)
 from .models import (
-    Actor,
     ApprovalCardStatus,
     ConversationRef,
     InboundMessage,
     PendingSubmission,
-    ProgressMilestone,
     ProgressUpdate,
 )
+
+__all__ = [
+    "FeishuAdapter",
+    "FeishuApiClient",
+    "FeishuWebSocketGateway",
+    "lark_sdk_available",
+    "_build_approval_card",
+    "_build_progress_card",
+    "_extract_text",
+    "_parse_card_action_submission",
+    "_parse_message_event",
+]
 
 
 def lark_sdk_available() -> bool:
@@ -229,8 +247,11 @@ class FeishuAdapter(ChannelAdapter):
                 return None
             return None
 
-    def request_approval(self, conversation: ConversationRef, prompt: ApprovalPrompt) -> None:
-        self._client.send_card(conversation, _build_approval_card(prompt, conversation=conversation, status="pending"))
+    def request_approval(self, conversation: ConversationRef, prompt: ApprovalPrompt) -> str | None:
+        return self._client.send_card(
+            conversation,
+            _build_approval_card(prompt, conversation=conversation, status="pending"),
+        )
 
     def resolve_approval(
         self,
@@ -367,117 +388,6 @@ def _card_action_response(level: str, content: str) -> Any:
     return response_type({"toast": {"type": level, "content": content}})
 
 
-def _event_attr(value: Any, *path: str) -> Any:
-    current = value
-    for name in path:
-        if current is None:
-            return None
-        if isinstance(current, dict):
-            current = current.get(name)
-        else:
-            current = getattr(current, name, None)
-    return current
-
-
-def _parse_message_event(event: Any) -> InboundMessage | None:
-    content = _event_attr(event, "event", "message", "content") or "{}"
-    text = _extract_text(str(content))
-    if not text:
-        return None
-    conversation = ConversationRef(
-        channel="feishu",
-        account_id="default",
-        conversation_id=str(_event_attr(event, "event", "message", "chat_id") or ""),
-        thread_id=_event_attr(event, "event", "message", "thread_id")
-        or _event_attr(event, "event", "message", "root_id"),
-    )
-    return InboundMessage(
-        conversation=conversation,
-        actor=Actor(
-            user_id=str(
-                _event_attr(event, "event", "sender", "sender_id", "open_id")
-                or _event_attr(event, "event", "sender", "sender_id", "user_id")
-                or ""
-            ),
-            display_name=None,
-            chat_type=_event_attr(event, "event", "message", "chat_type"),
-        ),
-        text=text,
-        source_message_id=_event_attr(event, "event", "message", "message_id"),
-        reply_to_message_id=_event_attr(event, "event", "message", "parent_id")
-        or _event_attr(event, "event", "message", "message_id"),
-    )
-
-
-def _message_dedupe_key(event: Any) -> str | None:
-    return _event_attr(event, "header", "event_id") or _event_attr(event, "event", "message", "message_id")
-
-
-def _card_action_dedupe_key(event: Any) -> str | None:
-    header_key = _event_attr(event, "header", "event_id")
-    if header_key:
-        return str(header_key)
-    action_token = _event_attr(event, "event", "token")
-    open_message_id = _event_attr(event, "event", "context", "open_message_id")
-    request_id = _event_attr(event, "event", "action", "value", "request_id")
-    combo = ":".join(str(part) for part in [action_token, open_message_id, request_id] if part)
-    return combo or None
-
-
-def _extract_text(content: str) -> str:
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return content.strip()
-    if isinstance(payload, dict):
-        text = payload.get("text")
-        if isinstance(text, str):
-            return text.strip()
-    return ""
-
-
-def _parse_card_action_submission(event: Any) -> PendingSubmission | None:
-    value = _event_attr(event, "event", "action", "value")
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            value = {"request_id": value}
-    if not isinstance(value, dict):
-        return None
-    request_id = value.get("request_id")
-    decision = value.get("decision")
-    if not isinstance(request_id, str) or decision not in {"approve", "deny"}:
-        return None
-    conversation = ConversationRef(
-        channel="feishu",
-        account_id=str(value.get("account_id") or "default"),
-        conversation_id=str(
-            value.get("conversation_id")
-            or _event_attr(event, "event", "context", "open_chat_id")
-            or "interactive"
-        ),
-        thread_id=str(value.get("thread_id")) if value.get("thread_id") else None,
-    )
-    return PendingSubmission(
-        conversation=conversation,
-        actor=Actor(
-            user_id=str(
-                _event_attr(event, "event", "operator", "open_id")
-                or _event_attr(event, "event", "operator", "user_id")
-                or ""
-            )
-        ),
-        request_id=request_id,
-        kind="approval",
-        decision=decision,
-        codex_thread_id=str(value.get("codex_thread_id")) if value.get("codex_thread_id") else None,
-        codex_turn_id=str(value.get("codex_turn_id")) if value.get("codex_turn_id") else None,
-        codex_item_id=str(value.get("codex_item_id")) if value.get("codex_item_id") else None,
-        open_message_id=str(_event_attr(event, "event", "context", "open_message_id") or "") or None,
-    )
-
-
 def _extract_message_id(response: dict[str, Any]) -> str | None:
     data = response.get("data")
     if isinstance(data, dict):
@@ -489,118 +399,3 @@ def _extract_message_id(response: dict[str, Any]) -> str | None:
     if isinstance(response.get("message_id"), str):
         return response["message_id"]
     return None
-
-
-def _build_progress_card(update: ProgressUpdate) -> dict[str, Any]:
-    title, template, badge = _progress_style(update.milestone)
-    elements = [
-        {"tag": "markdown", "content": f"**{badge} {update.summary}**"},
-    ]
-    if update.detail:
-        elements.append({"tag": "markdown", "content": update.detail})
-    elements.append({"tag": "markdown", "content": "_该进度消息会在同一轮执行中持续更新。_"})
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"content": title, "tag": "plain_text"},
-            "template": template,
-        },
-        "elements": elements,
-    }
-
-
-def _progress_style(milestone: ProgressMilestone) -> tuple[str, str, str]:
-    mapping: dict[ProgressMilestone, tuple[str, str, str]] = {
-        "accepted": ("已收到请求", "blue", "📨"),
-        "running": ("正在处理", "wathet", "⏳"),
-        "waiting_approval": ("等待确认", "orange", "⚠️"),
-        "waiting_input": ("等待补充信息", "orange", "📝"),
-        "completed": ("已完成", "green", "✅"),
-        "failed": ("执行失败", "red", "❌"),
-    }
-    return mapping[milestone]
-
-
-def _build_approval_card(
-    prompt: ApprovalPrompt,
-    *,
-    conversation: ConversationRef,
-    status: ApprovalCardStatus,
-    detail: str | None = None,
-) -> dict[str, Any]:
-    title, template, badge = _approval_style(status)
-    elements: list[dict[str, Any]] = [
-        {"tag": "markdown", "content": f"**{badge} {prompt.title}**"},
-        {"tag": "markdown", "content": prompt.prompt},
-    ]
-    if prompt.reason:
-        elements.append({"tag": "markdown", "content": f"**触发原因**\n{prompt.reason}"})
-    if prompt.command:
-        elements.append({"tag": "markdown", "content": f"**命令**\n```bash\n{prompt.command}\n```"})
-    if prompt.cwd:
-        elements.append({"tag": "markdown", "content": f"**工作目录**\n`{prompt.cwd}`"})
-    if prompt.method:
-        elements.append({"tag": "markdown", "content": f"**审批类型**\n`{prompt.method}`"})
-    if detail:
-        elements.append({"tag": "markdown", "content": f"**处理结果**\n{detail}"})
-    if status == "pending":
-        approve_value = _approval_action_value(prompt, conversation=conversation, decision="approve")
-        deny_value = _approval_action_value(prompt, conversation=conversation, decision="deny")
-        elements.extend(
-            [
-                {"tag": "markdown", "content": "_确认后会继续当前 Codex 执行；拒绝会终止本次敏感操作。_"},
-                {
-                    "tag": "action",
-                    "actions": [
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": "继续执行"},
-                            "type": "primary",
-                            "value": approve_value,
-                        },
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": "拒绝本次操作"},
-                            "value": deny_value,
-                        },
-                    ],
-                },
-            ]
-        )
-    else:
-        elements.append({"tag": "markdown", "content": "_该审批卡片已结束，不会再次触发相同操作。_"})
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {"title": {"content": title, "tag": "plain_text"}, "template": template},
-        "elements": elements,
-    }
-
-
-def _approval_action_value(
-    prompt: ApprovalPrompt,
-    *,
-    conversation: ConversationRef,
-    decision: str,
-) -> dict[str, Any]:
-    return {
-        "request_id": prompt.request_id,
-        "decision": decision,
-        "conversation_id": conversation.conversation_id,
-        "account_id": conversation.account_id,
-        "thread_id": conversation.thread_id,
-        "codex_thread_id": prompt.codex_thread_id,
-        "codex_turn_id": prompt.codex_turn_id,
-        "codex_item_id": prompt.codex_item_id,
-    }
-
-
-def _approval_style(status: ApprovalCardStatus) -> tuple[str, str, str]:
-    mapping: dict[ApprovalCardStatus, tuple[str, str, str]] = {
-        "pending": ("需要确认的操作", "orange", "⚠️"),
-        "approved": ("已确认，继续执行", "green", "✅"),
-        "denied": ("已拒绝本次操作", "red", "⛔"),
-        "expired": ("确认已过期", "grey", "⌛"),
-        "duplicate": ("该操作已处理", "grey", "ℹ️"),
-        "error": ("处理失败", "red", "❌"),
-    }
-    return mapping[status]

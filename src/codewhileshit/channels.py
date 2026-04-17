@@ -40,7 +40,7 @@ class ChannelAdapter(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def request_approval(self, conversation: ConversationRef, prompt: ApprovalPrompt) -> None:
+    def request_approval(self, conversation: ConversationRef, prompt: ApprovalPrompt) -> str | None:
         raise NotImplementedError
 
     @abc.abstractmethod
