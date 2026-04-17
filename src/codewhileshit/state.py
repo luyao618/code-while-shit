@@ -115,7 +115,8 @@ class StateStore:
             if session:
                 session.pending_request_id = pending.request_id
                 session.state = "waiting_approval" if pending.kind == "approval" else "waiting_input"
-                session.last_status = pending.prompt
+                if not getattr(session, "progress_message_id", None):
+                    session.last_status = pending.prompt
                 session.recovery_note = None
             self._save()
 
@@ -182,7 +183,8 @@ class StateStore:
                 session.pending_request_id = None
                 if session.state in {"waiting_approval", "waiting_input"}:
                     session.state = "running"
-                session.last_status = status
+                if not getattr(session, "progress_message_id", None):
+                    session.last_status = status
                 session.recovery_note = None
             self._save()
             resolved = PendingInteraction(

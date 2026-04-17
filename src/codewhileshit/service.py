@@ -511,7 +511,7 @@ class BridgeService:
             actor=submission.actor,
             text=prompt,
         )
-        recovered_session = replace(session, recovery_note=None)
+        recovered_session = self._replace_session(session, recovery_note=None)
         self._run_turn(recovery_message, recovered_session)
 
     def _render_approval_prompt(self, request: ApprovalRequest, reason: str) -> str:
@@ -536,7 +536,12 @@ class BridgeService:
         workspace = str(Path(requested).expanduser().resolve())
         Path(workspace).mkdir(parents=True, exist_ok=True)
         session = self.state.ensure_session(message.conversation, workspace)
-        updated = replace(session, active_workspace=workspace, state="idle", last_status=f"workspace -> {workspace}")
+        updated = self._replace_session(
+            session,
+            active_workspace=workspace,
+            state="idle",
+            last_status=f"workspace -> {workspace}",
+        )
         self.state.save_session(updated)
         self.state.ensure_binding(message.conversation, workspace)
         self.adapter.send_result(message.conversation, f"已切换工作目录到：{workspace}")
