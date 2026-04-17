@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import concurrent.futures
+import inspect
 import threading
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .channels import ApprovalPrompt, ChannelAdapter, InputPrompt
-from .codex_app_server import CodexAppServerBackend, CodexBackend
+from .codex_app_server import CodexAppServerBackend, CodexBackend, TurnMilestoneUpdate
 from .config import AppConfig
 from .models import (
     Actor,
@@ -51,6 +53,194 @@ class BridgeService:
     def should_accept_transport_event(self, kind: str, key: str | None) -> bool:
         return self.state.should_accept_transport_event(kind, key)
 
+    @staticmethod
+    def _replace_session(session: ConversationSession, **changes: object) -> ConversationSession:
+        extras = {
+            field: changes.pop(field)
+            for field in ("progress_message_id", "progress_milestone")
+            if field in changes
+        }
+        updated = replace(session, **changes)
+        for field in ("progress_message_id", "progress_milestone"):
+            setattr(updated, field, extras.get(field, getattr(session, field, None)))
+        return updated
+
+    @staticmethod
+    def _extract_message_handle(result: object) -> str | None:
+        if isinstance(result, str) and result.strip():
+            return result.strip()
+        if isinstance(result, dict):
+            for key in ("message_id", "id", "handle"):
+                value = result.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    @staticmethod
+    def _call_with_supported_kwargs(method: Any, *args: object, **kwargs: object) -> Any:
+        signature = inspect.signature(method)
+        supports_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        filtered = {
+            key: value
+            for key, value in kwargs.items()
+            if value is not None and (supports_var_kwargs or key in signature.parameters)
+        }
+        return method(*args, **filtered)
+
+    @staticmethod
+    def _session_state_for_milestone(milestone: str, fallback: str) -> str:
+        if milestone in {"accepted", "thinking", "running"}:
+            return "running"
+        if milestone == "waiting_approval":
+            return "waiting_approval"
+        if milestone == "waiting_input":
+            return "waiting_input"
+        if milestone == "completed":
+            return "idle"
+        if milestone == "failed":
+            return "failed"
+        return fallback
+
+    @staticmethod
+    def _milestone_text(milestone: str, text: str | None = None) -> str:
+        if text and text.strip():
+            return text.strip()
+        defaults = {
+            "accepted": "已收到：消息已进入处理队列。",
+            "thinking": "正在思考：Codex 正在分析你的请求。",
+            "running": "正在处理：Codex 正在执行任务。",
+            "waiting_input": "等待补充信息：Codex 需要你的进一步说明。",
+            "waiting_approval": "等待确认：Codex 需要你的确认。",
+            "completed": "已完成：Codex 已结束当前执行。",
+            "failed": "失败：Codex 执行未完成。",
+        }
+        return defaults.get(milestone, "正在处理：Codex 正在执行任务。")
+
+    @classmethod
+    def _normalize_progress_update(cls, update: object) -> tuple[str, str]:
+        if isinstance(update, TurnMilestoneUpdate):
+            return update.milestone, cls._milestone_text(update.milestone, update.text)
+        if isinstance(update, str):
+            text = update.strip()
+            lowered = text.lower()
+            if "已收到" in text:
+                return "accepted", text
+            if "等待确认" in text:
+                return "waiting_approval", text
+            if "等待补充" in text:
+                return "waiting_input", text
+            if "已完成" in text:
+                return "completed", text
+            if "失败" in text:
+                return "failed", text
+            if "思考" in text or "thinking" in lowered:
+                return "thinking", text
+            if "处理" in text or "继续执行" in text or "running" in lowered:
+                return "running", text
+            return "running", text or cls._milestone_text("running")
+        return "running", cls._milestone_text("running")
+
+    @staticmethod
+    def _final_progress_text(status: str, detail: str | None = None) -> str:
+        if status == "completed":
+            return "已完成：Codex 已结束当前执行。"
+        if status == "interrupted":
+            return "已停止：Codex 中断了当前执行。"
+        return detail.strip() if detail and detail.strip() else "失败：Codex 执行未完成。"
+
+    def _attempt_ack(self, message: InboundMessage) -> bool:
+        if not message.source_message_id:
+            return False
+        for name in ("send_ack", "ack_message", "acknowledge_message"):
+            method = getattr(self.adapter, name, None)
+            if callable(method):
+                try:
+                    result = self._call_with_supported_kwargs(
+                        method,
+                        message.conversation,
+                        message.source_message_id,
+                        source_message_id=message.source_message_id,
+                    )
+                except Exception:
+                    return False
+                return False if result is False else True
+        return False
+
+    def _publish_progress_surface(
+        self,
+        conversation: ConversationRef,
+        session: ConversationSession,
+        milestone: str,
+        text: str,
+        *,
+        final: bool = False,
+    ) -> ConversationSession:
+        existing_handle = getattr(session, "progress_message_id", None)
+        if getattr(session, "progress_milestone", None) == milestone and session.last_status == text and not final:
+            self.state.save_session(session)
+            return session
+        updated = self._replace_session(
+            session,
+            progress_milestone=milestone,
+            last_status=text,
+            state=self._session_state_for_milestone(milestone, session.state),
+        )
+        self.state.save_session(updated)
+        result: Any = None
+        used_existing_handle = False
+        if existing_handle:
+            for name in ("update_progress", "update_progress_message"):
+                method = getattr(self.adapter, name, None)
+                if callable(method):
+                    result = self._call_with_supported_kwargs(
+                        method,
+                        conversation,
+                        text,
+                        message_id=existing_handle,
+                        milestone=milestone,
+                        final=final,
+                        source_message_id=updated.last_source_message_id,
+                    )
+                    used_existing_handle = True
+                    break
+        if result is None:
+            result = self._call_with_supported_kwargs(
+                self.adapter.send_status,
+                conversation,
+                text,
+                message_id=existing_handle,
+                milestone=milestone,
+                final=final,
+                source_message_id=updated.last_source_message_id,
+            )
+            used_existing_handle = existing_handle is not None
+        handle = self._extract_message_handle(result)
+        if handle:
+            updated = self._replace_session(updated, progress_message_id=handle)
+        elif existing_handle and used_existing_handle:
+            updated = self._replace_session(updated, progress_message_id=existing_handle)
+        self.state.save_session(updated)
+        return updated
+
+    def _resolve_pending_surface(self, pending: PendingInteraction, status: str, detail: str) -> None:
+        approval_handle = getattr(pending, "approval_message_id", None)
+        for name in ("resolve_approval", "resolve_approval_message", "update_approval"):
+            method = getattr(self.adapter, name, None)
+            if callable(method):
+                self._call_with_supported_kwargs(
+                    method,
+                    pending.conversation,
+                    pending.request_id,
+                    message_id=approval_handle,
+                    status=status,
+                    detail=detail,
+                    pending=pending,
+                )
+                return
+
     def handle_message(self, message: InboundMessage) -> None:
         if not self._is_allowed(message.actor):
             self.adapter.send_result(message.conversation, "当前用户未在 allowlist 中，已拒绝执行。")
@@ -72,7 +262,7 @@ class BridgeService:
             return
         if session and session.recovery_note:
             self.state.save_session(
-                replace(session, state="idle", last_status=session.recovery_note, recovery_note=None)
+                self._replace_session(session, state="idle", last_status=session.recovery_note, recovery_note=None)
             )
             self.adapter.send_result(message.conversation, session.recovery_note)
             return
