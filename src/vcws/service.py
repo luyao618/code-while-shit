@@ -6,8 +6,9 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .agents import AgentBackend, AgentTurn, TurnState
 from .channels import ApprovalPrompt, ChannelAdapter, InputPrompt
-from .codex_app_server import CodexAppServerBackend, CodexBackend
+from .codex_app_server import CodexAppServerBackend
 from .config import AppConfig
 from .models import (
     Actor,
@@ -37,11 +38,13 @@ class BridgeService:
         self,
         config: AppConfig,
         adapter: ChannelAdapter,
-        backend: CodexBackend | None = None,
+        backend: AgentBackend | None = None,
         state_store: StateStore | None = None,
         policy: ApprovalPolicy | None = None,
+        terminal_sink: object = None,
     ):
         self.config = config
+        self.terminal_sink = terminal_sink
         self.adapter = adapter
         self.state = state_store or StateStore(config.state_file)
         self.policy = policy or ApprovalPolicy()
@@ -49,6 +52,8 @@ class BridgeService:
         self._progress = ProgressSurfaceManager(self.state, self.adapter)
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="bridge")
         self._conversation_locks: dict[str, threading.Lock] = {}
+        self._active_turns: dict[str, AgentTurn] = {}
+        self._active_turns_lock = threading.RLock()
         self._pending_events: dict[str, tuple[threading.Event, dict[str, str]]] = {}
         self._pending_lock = threading.RLock()
         self.state.recover_orphans()
@@ -62,6 +67,13 @@ class BridgeService:
     def handle_message(self, message: InboundMessage) -> None:
         if not self._is_allowed(message.actor):
             self.adapter.send_result(message.conversation, "当前用户未在 allowlist 中，已拒绝执行。")
+            return
+        text_stripped = message.text.strip()
+        if text_stripped in ("/cancel", "/stop"):
+            self._handle_cancel(message.conversation)
+            return
+        if text_stripped in ("/kill", "/clear"):
+            self._handle_kill(message.conversation)
             return
         session = self.state.get_session(message.conversation)
         pending = self.state.pending_for_conversation(message.conversation)
@@ -161,15 +173,22 @@ class BridgeService:
                         text,
                     )
 
-                outcome = self.backend.process_turn(
+                with self.backend.begin_turn(
                     conversation=message.conversation,
                     workspace_path=session.active_workspace,
                     prompt=message.text.strip(),
-                    existing_thread_id=binding.codex_thread_id,
+                    existing_thread_id=binding.agent_thread_id,
                     request_approval=lambda request: self._request_approval(session, message.actor, request),
                     request_input=lambda request: self._request_input(session, message.actor, request),
                     publish_status=publish_status,
-                )
+                ) as turn:
+                    with self._active_turns_lock:
+                        self._active_turns[session.key] = turn
+                    try:
+                        outcome = turn.run()
+                    finally:
+                        with self._active_turns_lock:
+                            self._active_turns.pop(session.key, None)
                 current = self.state.get_session(message.conversation) or session_holder["current"]
                 final_milestone = "completed" if outcome.status == "completed" else "failed"
                 final_text = final_progress_text(outcome.status, outcome.error or outcome.summary)
@@ -192,7 +211,7 @@ class BridgeService:
                     WorkspaceBinding(
                         session_key=session.key,
                         workspace_path=session.active_workspace,
-                        codex_thread_id=outcome.thread_id,
+                        agent_thread_id=outcome.thread_id,
                     )
                 )
                 if outcome.status == "completed":
@@ -352,6 +371,53 @@ class BridgeService:
         allowed = self.config.feishu.allowed_user_ids
         return not allowed or actor.user_id in allowed
 
+    def _handle_cancel(self, conversation: ConversationRef) -> None:
+        session = self.state.get_session(conversation)
+        session_key = session.key if session else None
+        turn = None
+        if session_key is not None:
+            with self._active_turns_lock:
+                turn = self._active_turns.get(session_key)
+        if turn is None:
+            self.adapter.send_result(conversation, "已停止：当前没有正在执行的 turn。")
+            return
+        if not getattr(turn, "supports_cancel", False):
+            self.adapter.send_result(
+                conversation,
+                "当前 agent 不支持 /cancel；请使用 /kill 重置 agent 进程。"
+                "（参考启动时发出的能力说明。）",
+            )
+            return
+        try:
+            turn.cancel()
+        except Exception as exc:
+            self.adapter.send_result(conversation, f"已停止：取消失败：{exc}")
+            return
+        self.adapter.send_result(conversation, "已停止：用户取消当前 turn。")
+
+    def _handle_kill(self, conversation: ConversationRef) -> None:
+        with self._active_turns_lock:
+            turns_snapshot = list(self._active_turns.items())
+            self._active_turns.clear()
+        for _key, turn in turns_snapshot:
+            try:
+                if hasattr(turn, "kill_event"):
+                    turn.kill_event.set()
+                if getattr(turn, "state", None) == TurnState.RUNNING:
+                    turn.state = TurnState.KILLED
+            except Exception:
+                pass
+        try:
+            self.backend.kill()
+        except Exception as exc:
+            self.adapter.send_result(conversation, f"已停止：backend.kill 失败：{exc}")
+            return
+        try:
+            self.state.wipe_agent_threads()
+        except Exception:
+            pass
+        self.adapter.send_result(conversation, "已停止：已重置 agent 进程。")
+
     def _handle_workspace_switch(self, message: InboundMessage) -> None:
         requested = message.text.strip().split(" ", 1)[1].strip()
         workspace = str(Path(requested).expanduser().resolve())
@@ -383,8 +449,8 @@ class BridgeService:
             return
         binding = self.state.get_binding(conversation, session.active_workspace)
         status.extend([f"状态：{session.state}", f"工作目录：{session.active_workspace}"])
-        if binding and binding.codex_thread_id:
-            status.append(f"Codex Thread：{binding.codex_thread_id}")
+        if binding and binding.agent_thread_id:
+            status.append(f"Codex Thread：{binding.agent_thread_id}")
         if getattr(session, "progress_milestone", None):
             status.append(f"进度阶段：{getattr(session, 'progress_milestone')}")
         if getattr(session, "progress_message_id", None):

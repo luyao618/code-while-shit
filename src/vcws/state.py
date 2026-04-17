@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -100,7 +101,7 @@ class StateStore:
         binding = WorkspaceBinding(
             session_key=binding.session_key,
             workspace_path=self._normalize_workspace(binding.workspace_path),
-            codex_thread_id=binding.codex_thread_id,
+            agent_thread_id=binding.agent_thread_id,
         )
         with self._lock:
             self._bindings[binding.key] = binding
@@ -233,17 +234,59 @@ class StateStore:
                     session.recovery_note = "服务已重启：待补充信息仍保留，收到你的回复后会尝试在原线程继续执行。"
             self._save()
 
+    def wipe_agent_threads(self) -> int:
+        """Clear agent_thread_id on all WorkspaceBindings and persist.
+
+        Called by stop-command handlers (US-007/008) to discard all agent
+        thread associations so the next turn starts a fresh thread.
+
+        Returns the number of bindings that were cleared.
+        """
+        with self._lock:
+            count = 0
+            for key, binding in self._bindings.items():
+                if binding.agent_thread_id is not None:
+                    self._bindings[key] = WorkspaceBinding(
+                        session_key=binding.session_key,
+                        workspace_path=binding.workspace_path,
+                        agent_thread_id=None,
+                    )
+                    count += 1
+            if count:
+                self._save()
+            return count
+
     def _load(self) -> None:
         if not self._path.exists():
             return
         payload = json.loads(self._path.read_text(encoding="utf-8"))
+        raw_bindings = payload.get("bindings", {})
+        needs_migration = any(
+            "codex_thread_id" in v and "agent_thread_id" not in v
+            for v in raw_bindings.values()
+            if isinstance(v, dict)
+        )
+        if needs_migration:
+            bak_path = self._path.with_suffix(self._path.suffix + ".bak")
+            if not bak_path.exists():
+                shutil.copy2(self._path, bak_path)
+            for v in raw_bindings.values():
+                if isinstance(v, dict) and "codex_thread_id" in v:
+                    if "agent_thread_id" not in v:
+                        v["agent_thread_id"] = v.pop("codex_thread_id")
+                    else:
+                        v.pop("codex_thread_id")
+        # Normalize bindings: remove any stray codex_thread_id if both present
+        for v in raw_bindings.values():
+            if isinstance(v, dict) and "codex_thread_id" in v and "agent_thread_id" in v:
+                v.pop("codex_thread_id")
         self._sessions = {
             key: self._session_from_payload(value)
             for key, value in payload.get("sessions", {}).items()
         }
         self._bindings = {
             key: WorkspaceBinding.from_dict(value)
-            for key, value in payload.get("bindings", {}).items()
+            for key, value in raw_bindings.items()
         }
         self._pending = {
             key: self._pending_from_payload(value)
@@ -252,6 +295,8 @@ class StateStore:
         transport_payload = payload.get("transport")
         if isinstance(transport_payload, dict):
             self._transport = FeishuTransportState.from_dict(transport_payload)
+        if needs_migration:
+            self._save()
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

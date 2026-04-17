@@ -109,7 +109,7 @@ class ConversationSession:
 class WorkspaceBinding:
     session_key: str
     workspace_path: str
-    codex_thread_id: str | None = None
+    agent_thread_id: str | None = None
 
     @property
     def key(self) -> str:

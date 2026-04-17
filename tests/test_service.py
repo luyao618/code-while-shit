@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 
 from vcws.channels import ApprovalPrompt, ChannelAdapter, InputPrompt
-from vcws.config import AppConfig, CodexConfig, FeishuConfig
+from vcws.config import AppConfig, CodexAgentConfig, FeishuConfig
+from vcws.agents import AgentConfig
 from vcws.models import Actor, ApprovalRequest, ConversationRef, ConversationSession, InboundMessage, InputRequest, PendingInteraction, PendingSubmission, TurnOutcome, WorkspaceBinding
 from vcws.service import BridgeService
 from vcws.state import StateStore
@@ -48,6 +49,9 @@ class FakeBackend:
     def __init__(self) -> None:
         self.turns = []
 
+    def begin_turn(self, conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status):
+        return _FakeTurn(self, conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status)
+
     def process_turn(self, conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status):
         self.turns.append((conversation, workspace_path, prompt, existing_thread_id))
         publish_status("处理中：Codex 正在执行任务。")
@@ -77,13 +81,44 @@ class FakeBackend:
         return TurnOutcome(thread_id=existing_thread_id or "thread-1", summary=f"done with {answer} / {decision}", status="completed")
 
 
+class _FakeTurn:
+    supports_cancel = False
+    supports_approval = True
+
+    def __init__(self, backend, conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status):
+        from vcws.agents.base import TurnState
+        self._backend = backend
+        self._args = (conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status)
+        self.state = TurnState.RUNNING
+        import threading
+        self.kill_event = threading.Event()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+    def run(self):
+        from vcws.agents.base import TurnState
+        outcome = self._backend.process_turn(*self._args)
+        self.state = TurnState.COMPLETED
+        return outcome
+
+    def cancel(self):
+        pass
+
+    def deltas(self):
+        raise NotImplementedError
+
+
 def build_config(tmp: str) -> AppConfig:
     return AppConfig(
         default_workspace=Path(tmp) / "workspace",
         runtime_dir=Path(tmp) / "runtime",
         state_file=Path(tmp) / "runtime" / "state.json",
         feishu=FeishuConfig(None, None, "https://open.feishu.cn", "https://example.test", (),),
-        codex=CodexConfig("codex", ("app-server",), "gpt-5.4", "on-request", "user", "workspace-write", None),
+        agent=AgentConfig("codex", CodexAgentConfig()),
     )
 
 
@@ -189,7 +224,7 @@ class AdditionalBridgeServiceTests(unittest.TestCase):
                 runtime_dir=config.runtime_dir,
                 state_file=config.state_file,
                 feishu=FeishuConfig(None, None, "https://open.feishu.cn", "https://example.test", ("owner",),),
-                codex=config.codex,
+                agent=config.agent,
             )
             adapter = FakeAdapter()
             service = BridgeService(config, adapter, backend=FakeBackend(), state_store=StateStore(config.state_file))
@@ -266,10 +301,7 @@ class AdditionalBridgeServiceTests(unittest.TestCase):
             self.assertIsNotNone(recovered.recovery_note)
 
     def test_pending_reply_after_restart_resumes_turn_on_same_thread(self) -> None:
-        class RecoveryBackend:
-            def __init__(self) -> None:
-                self.turns = []
-
+        class RecoveryBackend(FakeBackend):
             def process_turn(self, conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status):
                 self.turns.append((prompt, existing_thread_id))
                 publish_status("处理中：Codex 正在执行任务。")
@@ -448,7 +480,7 @@ class AdditionalBridgeServiceTests(unittest.TestCase):
                 runtime_dir=config.runtime_dir,
                 state_file=config.state_file,
                 feishu=FeishuConfig(None, None, "https://open.feishu.cn", "https://example.test", ("owner",),),
-                codex=config.codex,
+                agent=config.agent,
             )
             adapter = FakeAdapter()
             service = BridgeService(config, adapter, backend=FakeBackend(), state_store=StateStore(config.state_file))
