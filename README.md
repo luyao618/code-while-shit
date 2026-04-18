@@ -32,8 +32,7 @@ Bridge 是 Agent-agnostic 的；codex 是三个后端之一。运行时状态默
 - 所选 Agent 命令可用（`codex`、`claude`、`opencode`）
 - 一个可写的本地工作目录
 - 飞书开放平台应用的 **App ID** 和 **App Secret**
-- 已安装依赖（`lark-oapi` 会随 `pip install -e .` 安装）
-- 如果使用 claude-code：`pip install "vibe-coding-while-shit[claude]"`
+- 已安装依赖（`lark-oapi` 和 `claude-agent-sdk` 会随 `pip install -e .` 一起装好）
 
 ## 4. Quick Start
 

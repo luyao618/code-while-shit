@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import os
 import shutil
 import signal
 import sys
+import time
 from pathlib import Path
 
 from .agents import create_backend
 from .config import AppConfig, ConfigConflictError, load_dotenv
 from .feishu import FeishuAdapter, FeishuApiClient, FeishuWebSocketGateway, lark_sdk_available
-from .lockfile import LockAcquireError, acquire as lockfile_acquire
+from .lockfile import (
+    SERVE_LOCK_FILENAME,
+    Lock,
+    LockAcquireError,
+    acquire as lockfile_acquire,
+    pid_alive,
+)
 from .service import BridgeService
 from .terminal_sink import TerminalSink
 
@@ -20,8 +28,12 @@ _ENV_EXAMPLE = """# vcws configuration — copy to .env and fill in.
 FEISHU_APP_ID=
 FEISHU_APP_SECRET=
 CWS_DEFAULT_WORKSPACE=.
-# VCWS_AGENT=codex  # optional: codex | claude-code | opencode
-# FEISHU_ALLOWED_USERS=  # optional: comma-separated open_ids
+
+# Optional: default agent (codex | claude-code | opencode)
+# VCWS_AGENT=codex
+
+# Optional: comma-separated open_ids allowlist
+# FEISHU_ALLOWED_USERS=
 """
 
 
@@ -67,6 +79,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Default agent recorded in .env comment",
     )
 
+    stop_p = sub.add_parser("stop", help="Stop the running serve process")
+    stop_p.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        help="Seconds to wait for graceful shutdown before SIGKILL (default: 5)",
+    )
+
+    sub.add_parser("status", help="Show running serve info from lockfile")
+
+    restart_p = sub.add_parser("restart", help="Stop the running serve, then start a new one")
+    restart_p.add_argument(
+        "--agent",
+        choices=_AGENT_CHOICES,
+        default=None,
+        help="Agent backend (default: codex, or $VCWS_AGENT)",
+    )
+    restart_p.add_argument("--workspace", metavar="PATH", default=None, help="Workspace path")
+    restart_p.add_argument(
+        "--allow-auto-approve",
+        action="store_true",
+        default=False,
+        help="Allow auto-approve (opencode only)",
+    )
+    restart_p.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Force takeover of a stale lockfile",
+    )
+    restart_p.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        help="Seconds to wait for graceful shutdown before SIGKILL",
+    )
+
     return parser
 
 
@@ -86,6 +135,92 @@ def _check_agent_deps(agent: str) -> list[str]:
         if shutil.which("opencode") is None:
             problems.append("opencode 命令不可用")
     return problems
+
+
+def _read_lock_info(runtime_dir: Path):
+    lock_path = runtime_dir / SERVE_LOCK_FILENAME
+    if not lock_path.exists():
+        return None
+    return Lock.read(lock_path)
+
+
+def _run_status(runtime_dir: Path) -> int:
+    info = _read_lock_info(runtime_dir)
+    if info is None:
+        print("no serve running (no lockfile)")
+        return 0
+    alive = pid_alive(info.pid)
+    state = "running" if alive else "stale"
+    print(f"- state: {state}")
+    print(f"- pid: {info.pid}")
+    print(f"- agent: {info.agent_type}")
+    print(f"- workspace: {info.workspace}")
+    print(f"- lockfile: {runtime_dir / SERVE_LOCK_FILENAME}")
+    if not alive:
+        print("hint: pid is dead. Run `vcws serve --force` to take over the stale lock.")
+    return 0
+
+
+def _run_stop(runtime_dir: Path, timeout: float) -> int:
+    lock_path = runtime_dir / SERVE_LOCK_FILENAME
+    info = _read_lock_info(runtime_dir)
+    if info is None:
+        print("no serve running (no lockfile)")
+        return 0
+    if not pid_alive(info.pid):
+        print(f"- stale lockfile (pid={info.pid} not alive); cleaning up")
+        try:
+            lock_path.unlink()
+        except OSError as exc:
+            print(f"warning: could not remove lockfile: {exc}", file=sys.stderr)
+        return 0
+
+    pid = info.pid
+    print(f"- sending SIGTERM to pid={pid} (agent={info.agent_type})")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        print("- process already gone")
+        if lock_path.exists():
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+        return 0
+    except PermissionError:
+        print(f"error: permission denied signaling pid={pid}", file=sys.stderr)
+        return 1
+
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while time.monotonic() < deadline:
+        if not pid_alive(pid):
+            break
+        time.sleep(0.1)
+    else:
+        print(f"- timed out after {timeout}s; sending SIGKILL")
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        # Brief grace for OS cleanup
+        for _ in range(20):
+            if not pid_alive(pid):
+                break
+            time.sleep(0.1)
+
+    # Clean lockfile if it still references the dead pid
+    leftover = _read_lock_info(runtime_dir)
+    if leftover is not None and leftover.pid == pid and lock_path.exists():
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+    if pid_alive(pid):
+        print(f"error: pid={pid} still alive after SIGKILL", file=sys.stderr)
+        return 1
+    print(f"- stopped pid={pid}")
+    return 0
 
 
 def _run_init(workspace: str, agent: str) -> int:
@@ -136,6 +271,18 @@ def main(argv: list[str] | None = None) -> int:
 
     config.ensure_runtime_dirs()
 
+    if args.command == "status":
+        return _run_status(config.runtime_dir)
+
+    if args.command == "stop":
+        return _run_stop(config.runtime_dir, args.timeout)
+
+    if args.command == "restart":
+        rc = _run_stop(config.runtime_dir, args.timeout)
+        if rc != 0:
+            return rc
+        return _run_serve(args, config)
+
     # --- doctor ---
     if args.command == "doctor":
         problems: list[str] = []
@@ -168,7 +315,14 @@ def main(argv: list[str] | None = None) -> int:
         print("配置看起来可启动（Feishu WebSocket mode）。")
         return 0
 
-    # --- serve ---
+    if args.command == "serve":
+        return _run_serve(args, config)
+
+    print(f"error: unknown command: {args.command}", file=sys.stderr)
+    return 2
+
+
+def _run_serve(args: argparse.Namespace, config: AppConfig) -> int:
     agent_type = config.agent.agent_type
     try:
         lock = lockfile_acquire(
