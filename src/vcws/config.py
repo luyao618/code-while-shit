@@ -8,7 +8,7 @@ from typing import Literal
 
 AgentType = Literal["codex", "claude-code", "opencode"]
 
-DEFAULT_AGENT: AgentType = "codex"
+DEFAULT_AGENT: AgentType = "claude-code"
 
 
 class ConfigConflictError(ValueError):

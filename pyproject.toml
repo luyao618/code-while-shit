@@ -12,10 +12,16 @@ license = {text = "MIT"}
 authors = [{name = "Codex"}]
 dependencies = [
   "lark-oapi==1.5.3",
+  "claude-agent-sdk>=0.1.0",
 ]
 
 [project.optional-dependencies]
-claude = ["claude-agent-sdk>=0.1.0"]
+# Kept for backward compatibility with `pip install 'vibe-coding-while-shit[claude]'`.
+# claude-agent-sdk is now a base dependency, so this extra is a no-op.
+claude = []
+
+[project.scripts]
+vcws = "vcws.__main__:main"
 
 [project.scripts]
 vcws = "vcws.__main__:main"

@@ -11,6 +11,8 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+SERVE_LOCK_FILENAME = "serve.lock"
+
 
 class LockAcquireError(RuntimeError):
     """Lockfile acquire failed — another process holds the lock or stale-lock takeover refused."""
@@ -43,7 +45,8 @@ class Lock:
         self._released = True
 
     @staticmethod
-    def _read(path: Path) -> Optional[LockInfo]:
+    def read(path: Path) -> Optional[LockInfo]:
+        """Public API: parse a lockfile, returning None if missing/corrupt."""
         try:
             content = path.read_text().strip()
             parts = content.split("\n", 2)
@@ -54,8 +57,11 @@ class Lock:
         except (OSError, ValueError, IndexError):
             return None
 
+    # Backwards-compat alias (kept private to avoid churn elsewhere).
+    _read = read
 
-def _pid_alive(pid: int) -> bool:
+
+def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -68,6 +74,10 @@ def _pid_alive(pid: int) -> bool:
             return False
         return True
     return True
+
+
+# Backwards-compat alias.
+_pid_alive = pid_alive
 
 
 def acquire(
