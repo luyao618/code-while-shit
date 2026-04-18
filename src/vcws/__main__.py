@@ -30,7 +30,7 @@ FEISHU_APP_SECRET=
 CWS_DEFAULT_WORKSPACE=.
 
 # Optional: default agent (codex | claude-code | opencode)
-# VCWS_AGENT=codex
+# VCWS_AGENT=claude-code
 
 # Optional: comma-separated open_ids allowlist
 # FEISHU_ALLOWED_USERS=
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent",
         choices=_AGENT_CHOICES,
         default=None,
-        help="Agent backend (default: codex, or $VCWS_AGENT)",
+        help="Agent backend (default: claude-code, or $VCWS_AGENT)",
     )
     serve_p.add_argument("--workspace", metavar="PATH", default=None, help="Workspace path")
     serve_p.add_argument(
@@ -60,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Force takeover of a stale lockfile (wired in US-009)",
+    )
+    serve_p.add_argument(
+        "--foreground",
+        action="store_true",
+        default=False,
+        help="Run in the foreground instead of detaching (default: detach to background)",
     )
 
     doctor_p = sub.add_parser("doctor", help="Validate local configuration")
@@ -75,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_p.add_argument(
         "--agent",
         choices=_AGENT_CHOICES,
-        default="codex",
+        default="claude-code",
         help="Default agent recorded in .env comment",
     )
 
@@ -94,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent",
         choices=_AGENT_CHOICES,
         default=None,
-        help="Agent backend (default: codex, or $VCWS_AGENT)",
+        help="Agent backend (default: claude-code, or $VCWS_AGENT)",
     )
     restart_p.add_argument("--workspace", metavar="PATH", default=None, help="Workspace path")
     restart_p.add_argument(
@@ -114,6 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=5.0,
         help="Seconds to wait for graceful shutdown before SIGKILL",
+    )
+    restart_p.add_argument(
+        "--foreground",
+        action="store_true",
+        default=False,
+        help="Run in the foreground instead of detaching (default: detach to background)",
     )
 
     return parser
@@ -322,8 +334,43 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _daemonize(log_path: Path) -> None:
+    """Detach the current process to background, redirecting stdout/stderr to log_path.
+
+    Uses a single fork (sufficient for our use): parent exits so the shell returns,
+    child becomes a session leader and writes to the log file. stdin is closed.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Flush before fork so buffered banner doesn't double-print.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    pid = os.fork()
+    if pid > 0:
+        # Parent: print info and exit so the shell prompt returns.
+        print(f"- vcws serve detached to background (pid={pid})")
+        print(f"- logs: {log_path}")
+        os._exit(0)
+    # Child
+    os.setsid()
+    # Reopen stdio
+    devnull_fd = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull_fd, 0)
+    os.close(devnull_fd)
+    log_fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(log_fd, 1)
+    os.dup2(log_fd, 2)
+    os.close(log_fd)
+
+
 def _run_serve(args: argparse.Namespace, config: AppConfig) -> int:
     agent_type = config.agent.agent_type
+
+    foreground = getattr(args, "foreground", False)
+    if not foreground:
+        log_path = config.runtime_dir / "serve.log"
+        _daemonize(log_path)
+        # Now in detached child; continue startup.
+
     try:
         lock = lockfile_acquire(
             config.runtime_dir,
