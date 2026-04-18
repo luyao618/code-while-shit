@@ -154,10 +154,12 @@ class BridgeServiceTests(unittest.TestCase):
             service.handle_message(InboundMessage(conversation, actor, "approve"))
 
             deadline = time.time() + 5
-            while not adapter.results and time.time() < deadline:
+            while not any("done with python / approve" in s[1] for s in adapter.statuses) and time.time() < deadline:
                 time.sleep(0.01)
-            self.assertTrue(adapter.results)
-            self.assertIn("done with python / approve", adapter.results[-1][1])
+            self.assertTrue(
+                any("done with python / approve" in s[1] for s in adapter.statuses),
+                f"final reply not found in statuses: {adapter.statuses!r}",
+            )
 
     def test_workspace_switch_and_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

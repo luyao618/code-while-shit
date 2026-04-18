@@ -137,9 +137,15 @@ class ProgressSurfaceManager:
         text: str,
         *,
         final: bool = False,
+        detail: str | None = None,
     ) -> ConversationSession:
         existing_handle = getattr(session, "progress_message_id", None)
-        if getattr(session, "progress_milestone", None) == milestone and session.last_status == text and not final:
+        if (
+            getattr(session, "progress_milestone", None) == milestone
+            and session.last_status == text
+            and not final
+            and not detail
+        ):
             self._state.save_session(session)
             return session
         updated = replace_session(
@@ -149,7 +155,7 @@ class ProgressSurfaceManager:
             state=session_state_for_milestone(milestone, session.state),
         )
         self._state.save_session(updated)
-        progress = ProgressUpdate(milestone, text)
+        progress = ProgressUpdate(milestone, text, detail)
         result = call_with_supported_kwargs(
             self._adapter.upsert_progress,
             conversation,

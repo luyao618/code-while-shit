@@ -23,9 +23,6 @@ claude = []
 [project.scripts]
 vcws = "vcws.__main__:main"
 
-[project.scripts]
-vcws = "vcws.__main__:main"
-
 [tool.setuptools]
 package-dir = {"" = "src"}
 

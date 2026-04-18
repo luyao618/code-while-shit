@@ -192,12 +192,14 @@ class BridgeService:
                 current = self.state.get_session(message.conversation) or session_holder["current"]
                 final_milestone = "completed" if outcome.status == "completed" else "failed"
                 final_text = final_progress_text(outcome.status, outcome.error or outcome.summary)
+                reply_body = outcome.summary if outcome.status == "completed" else (outcome.error or outcome.summary)
                 current = self._progress.publish(
                     message.conversation,
                     current,
                     final_milestone,
                     final_text,
                     final=True,
+                    detail=reply_body,
                 )
                 final_session = replace_session(
                     current,
@@ -214,10 +216,6 @@ class BridgeService:
                         agent_thread_id=outcome.thread_id,
                     )
                 )
-                if outcome.status == "completed":
-                    self.adapter.send_result(message.conversation, outcome.summary)
-                else:
-                    self.adapter.send_result(message.conversation, outcome.error or outcome.summary)
             except Exception as exc:
                 current = self.state.get_session(message.conversation) or session
                 final_text = final_progress_text("failed", f"失败：{exc}")
@@ -227,6 +225,7 @@ class BridgeService:
                     "failed",
                     final_text,
                     final=True,
+                    detail=f"执行失败：{exc}",
                 )
                 errored = replace_session(
                     current,
@@ -236,7 +235,6 @@ class BridgeService:
                     progress_milestone="failed",
                 )
                 self.state.save_session(errored)
-                self.adapter.send_result(message.conversation, f"执行失败：{exc}")
 
     def _request_approval(self, session: ConversationSession, actor: Actor, request: ApprovalRequest) -> str:
         decision = self.policy.evaluate(request)
