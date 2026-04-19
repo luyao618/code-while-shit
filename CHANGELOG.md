@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.1 (2026-04-19)
+
 ### Added
 - `cws update` — re-installs cws from upstream `main` via `uv tool install --force`. One-liner upgrade for users.
 
