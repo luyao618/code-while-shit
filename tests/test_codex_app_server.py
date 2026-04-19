@@ -3,12 +3,12 @@ from __future__ import annotations
 import queue
 import unittest
 
-from vcws.codex_app_server import CodexAppServerBackend
-from vcws.config import CodexConfig
-from vcws.models import ConversationRef
+from cws.codex_app_server import CodexAppServerBackend
+from cws.config import CodexConfig
+from cws.models import ConversationRef
 
 try:
-    from vcws.models import ProgressUpdate
+    from cws.models import ProgressUpdate
 except ImportError:  # pragma: no cover - feature-gated below
     ProgressUpdate = None
 

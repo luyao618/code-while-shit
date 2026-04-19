@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from vcws.state import StateStore
+from cws.state import StateStore
 
 
 def _write_legacy_state(path: Path, thread_id: str = "t-123") -> None:

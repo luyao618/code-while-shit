@@ -123,10 +123,10 @@ class AppConfig:
 
         # --- agent_type ---
         cli_agent = getattr(args, "agent", None) or None
-        env_agent = env.get("VCWS_AGENT") or None
+        env_agent = env.get("CWS_AGENT") or None
         if cli_agent and env_agent and cli_agent != env_agent:
             raise ConfigConflictError(
-                f"agent conflict: CLI={cli_agent!r} vs env VCWS_AGENT={env_agent!r}"
+                f"agent conflict: CLI={cli_agent!r} vs env CWS_AGENT={env_agent!r}"
             )
         agent_type = cli_agent or env_agent
         if not agent_type:
@@ -204,7 +204,7 @@ class AppConfig:
             env = dict(os.environ)
         # Build a minimal namespace; agent defaults to codex for backward compat
         ns = argparse.Namespace(
-            agent=env.get("VCWS_AGENT", DEFAULT_AGENT),
+            agent=env.get("CWS_AGENT", DEFAULT_AGENT),
             workspace=None,
             allow_auto_approve=False,
             force=False,

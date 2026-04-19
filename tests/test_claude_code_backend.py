@@ -1,10 +1,10 @@
 import sys
 import pytest
-from vcws.agents.claude_code import ClaudeCodeAgentTurn, ClaudeCodeImportError
+from cws.agents.claude_code import ClaudeCodeAgentTurn, ClaudeCodeImportError
 
 
 def test_import_error_when_sdk_missing(monkeypatch):
-    from vcws.agents import claude_code as cc
+    from cws.agents import claude_code as cc
 
     def fake_import_that_raises(name, *a, **kw):
         if name == "claude_agent_sdk":
@@ -20,7 +20,7 @@ def test_import_error_when_sdk_missing(monkeypatch):
 
 def test_cancel_sets_state_cancelled():
     from unittest.mock import MagicMock
-    from vcws.agents.base import TurnState
+    from cws.agents.base import TurnState
 
     turn = ClaudeCodeAgentTurn(
         backend=MagicMock(),
@@ -40,7 +40,7 @@ def test_cancel_sets_state_cancelled():
 
 def test_exit_no_double_cancel():
     from unittest.mock import MagicMock
-    from vcws.agents.base import TurnState
+    from cws.agents.base import TurnState
 
     turn = ClaudeCodeAgentTurn(
         backend=MagicMock(),

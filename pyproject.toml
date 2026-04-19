@@ -21,7 +21,7 @@ dependencies = [
 claude = []
 
 [project.scripts]
-vcws = "vcws.__main__:main"
+cws = "cws.__main__:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

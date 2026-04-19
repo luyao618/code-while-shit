@@ -1,11 +1,11 @@
 from unittest.mock import MagicMock
 import pytest
-from vcws.agents.opencode import (
+from cws.agents.opencode import (
     OpencodeAgentBackend,
     OpencodeAgentTurn,
     _pick_free_port,
 )
-from vcws.agents.base import TurnState, CancelNotSupported
+from cws.agents.base import TurnState, CancelNotSupported
 
 
 class FakeConfig:

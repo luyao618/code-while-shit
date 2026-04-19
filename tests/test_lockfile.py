@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import pytest
-from vcws.lockfile import acquire, LockAcquireError
+from cws.lockfile import acquire, LockAcquireError
 
 
 def test_acquire_empty_dir(tmp_path: Path):
@@ -42,7 +42,7 @@ def test_acquire_stale_pid_with_env(tmp_path: Path, monkeypatch):
     lock_file = tmp_path / "serve.lock"
     dead_pid = 2_000_000
     lock_file.write_text(f"{dead_pid}\ncodex\n{tmp_path}")
-    monkeypatch.setenv("VCWS_TAKEOVER_STALE", "1")
+    monkeypatch.setenv("CWS_TAKEOVER_STALE", "1")
     lock = acquire(tmp_path, agent_type="codex", workspace=str(tmp_path))
     lock.release()
 

@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from vcws.models import ConversationRef, PendingInteraction
-from vcws.state import StateStore
+from cws.models import ConversationRef, PendingInteraction
+from cws.state import StateStore
 
 
 class StateStoreTests(unittest.TestCase):

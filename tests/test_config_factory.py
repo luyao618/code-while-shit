@@ -1,6 +1,6 @@
 import argparse
 import pytest
-from vcws.config import AppConfig, ConfigConflictError, CodexAgentConfig, ClaudeCodeAgentConfig, OpencodeAgentConfig
+from cws.config import AppConfig, ConfigConflictError, CodexAgentConfig, ClaudeCodeAgentConfig, OpencodeAgentConfig
 
 
 def _args(**kw):
@@ -28,9 +28,9 @@ def test_agent_defaults_to_codex():
     assert isinstance(cfg.agent, CodexAgentConfig)
 
 
-def test_env_only_agent_via_vcws_agent():
+def test_env_only_agent_via_cws_agent():
     ns = _args()
-    cfg = AppConfig.from_sources(ns, env={"VCWS_AGENT": "codex", "FEISHU_APP_ID": "a", "FEISHU_APP_SECRET": "b"})
+    cfg = AppConfig.from_sources(ns, env={"CWS_AGENT": "codex", "FEISHU_APP_ID": "a", "FEISHU_APP_SECRET": "b"})
     assert isinstance(cfg.agent, CodexAgentConfig)
 
 

@@ -1,15 +1,15 @@
 import threading
 from unittest.mock import MagicMock
 
-from vcws.config import AppConfig, FeishuConfig, CodexAgentConfig
-from vcws.service import BridgeService
-from vcws.models import (
+from cws.config import AppConfig, FeishuConfig, CodexAgentConfig
+from cws.service import BridgeService
+from cws.models import (
     Actor,
     ConversationRef,
     InboundMessage,
     TurnOutcome,
 )
-from vcws.agents.base import TurnState, CancelNotSupported
+from cws.agents.base import TurnState, CancelNotSupported
 
 
 def _make_config(tmp_path):
@@ -187,7 +187,7 @@ def test_kill_invokes_backend_kill_once(tmp_path):
 
 
 def test_kill_wipes_agent_threads(tmp_path):
-    from vcws.models import WorkspaceBinding
+    from cws.models import WorkspaceBinding
     backend = FakeBackend()
     service, adapter = _make_service(tmp_path, backend)
     conversation = _make_conversation()
@@ -251,7 +251,7 @@ def test_kill_via_handle_message_slash_clear(tmp_path):
 
 
 def test_next_message_after_kill_gets_fresh_thread(tmp_path):
-    from vcws.models import WorkspaceBinding
+    from cws.models import WorkspaceBinding
     backend = FakeBackend()
     service, adapter = _make_service(tmp_path, backend)
     conversation = _make_conversation()

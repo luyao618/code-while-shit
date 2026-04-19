@@ -6,12 +6,12 @@ import time
 import unittest
 from pathlib import Path
 
-from vcws.channels import ApprovalPrompt, ChannelAdapter, InputPrompt
-from vcws.config import AppConfig, CodexAgentConfig, FeishuConfig
-from vcws.agents import AgentConfig
-from vcws.models import Actor, ApprovalRequest, ConversationRef, ConversationSession, InboundMessage, InputRequest, PendingInteraction, PendingSubmission, TurnOutcome, WorkspaceBinding
-from vcws.service import BridgeService
-from vcws.state import StateStore
+from cws.channels import ApprovalPrompt, ChannelAdapter, InputPrompt
+from cws.config import AppConfig, CodexAgentConfig, FeishuConfig
+from cws.agents import AgentConfig
+from cws.models import Actor, ApprovalRequest, ConversationRef, ConversationSession, InboundMessage, InputRequest, PendingInteraction, PendingSubmission, TurnOutcome, WorkspaceBinding
+from cws.service import BridgeService
+from cws.state import StateStore
 
 HAS_PROGRESS_SURFACE_STATE = all(
     field in ConversationSession.__dataclass_fields__
@@ -86,7 +86,7 @@ class _FakeTurn:
     supports_approval = True
 
     def __init__(self, backend, conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status):
-        from vcws.agents.base import TurnState
+        from cws.agents.base import TurnState
         self._backend = backend
         self._args = (conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status)
         self.state = TurnState.RUNNING
@@ -100,7 +100,7 @@ class _FakeTurn:
         pass
 
     def run(self):
-        from vcws.agents.base import TurnState
+        from cws.agents.base import TurnState
         outcome = self._backend.process_turn(*self._args)
         self.state = TurnState.COMPLETED
         return outcome

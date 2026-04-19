@@ -41,7 +41,7 @@ Target: bump from 0.1.0 → 0.2.0
 
 ## ADR
 
-- **Decision**: Adopt **Option B′** — `AgentBackend.begin_turn() -> AgentTurn` context-manager handle; split `codex_app_server.py` into `src/vcws/agents/{base,codex,claude_code,opencode}.py` with a single shim release; PID lockfile with explicit `--force`/`VCWS_TAKEOVER_STALE=1` for stale takeover; add `--agent`/`--workspace` CLI flags with declared CLI-over-env precedence (conflict = exit non-zero); `/cancel|/stop` + `/kill|/clear` routes; stdout `terminal_sink`; opencode capability banner + `--allow-auto-approve` gate.
+- **Decision**: Adopt **Option B′** — `AgentBackend.begin_turn() -> AgentTurn` context-manager handle; split `codex_app_server.py` into `src/cws/agents/{base,codex,claude_code,opencode}.py` with a single shim release; PID lockfile with explicit `--force`/`CWS_TAKEOVER_STALE=1` for stale takeover; add `--agent`/`--workspace` CLI flags with declared CLI-over-env precedence (conflict = exit non-zero); `/cancel|/stop` + `/kill|/clear` routes; stdout `terminal_sink`; opencode capability banner + `--allow-auto-approve` gate.
 - **Drivers**: backward compatibility (state file + Feishu UX); integration-protocol heterogeneity (codex thread, claude session, opencode ephemeral); stop-semantics correctness without silent asymmetry.
 - **Alternatives considered**:
   - Option A (rename-in-place) — rejected: bakes codex `thread_id` into shared Protocol, guarantees 0.3 rework.
@@ -51,7 +51,7 @@ Target: bump from 0.1.0 → 0.2.0
 - **Consequences**:
   - `AgentTurn` becomes the primary lifecycle object; `_run_turn` wraps `with backend.begin_turn(...) as turn:`.
   - State file migration required: `codex_thread_id` field rename to `agent_thread_id` with one-shot migration on load.
-  - Shim for `vcws.codex_app_server` kept **one release only**; no pickle support (documented).
+  - Shim for `cws.codex_app_server` kept **one release only**; no pickle support (documented).
   - opencode auto-approve gated behind explicit flag — default refuses tool invocations with a Feishu explanation.
 - **Follow-ups**: (1) 0.3 can remove the shim; (2) Consider `/switch <agent>` command in 0.3; (3) Evaluate whether opencode capability banner should move into `/status`.
 
@@ -60,7 +60,7 @@ Target: bump from 0.1.0 → 0.2.0
 Cross-reference to spec acceptance criteria; each section below maps to one feature goal.
 
 ### Goal 1 — Multi-agent support (codex, claude-code, opencode)
-- Abstract `AgentBackend` Protocol (`src/vcws/agents/base.py`):
+- Abstract `AgentBackend` Protocol (`src/cws/agents/base.py`):
   - `begin_turn(conversation, workspace_path, prompt, existing_thread_id, callbacks) -> AgentTurn` (context manager)
   - `kill() -> None` (process-level teardown; agents without persistent process may noop)
   - class attribute `agent_type: str`; per-turn capability flags live on `AgentTurn` instances (`.supports_cancel`, `.supports_approval`)
@@ -71,15 +71,15 @@ Cross-reference to spec acceptance criteria; each section below maps to one feat
   - `run() -> TurnOutcome` — synchronous run-to-completion; sets `state = COMPLETED` on normal return, `CANCELLED` / `KILLED` on those paths. `run()` is the primary driver.
   - `cancel() -> None` — non-blocking; sets `state = CANCELLED` and raises `CancelNotSupported` if `supports_cancel=False` (service layer catches).
   - `deltas()` iteration — optional streaming view alongside `run()`; codex/claude-code provide, opencode may provide.
-- Codex backend (`src/vcws/agents/codex.py`): ported from current `codex_app_server.py`; `AgentTurn.cancel` sends `turn/cancel` JSON-RPC; `kill` terminates subprocess and resets `_process`/`_pending`. `thread_id` stays **internal** to codex backend, persisted via the renamed state field.
-- Claude-code backend (`src/vcws/agents/claude_code.py`): wraps `claude-agent-sdk` (optional dep). `AgentTurn` drives SDK's async interface via `asyncio.run()` inside a worker thread (matches existing sync service contract). Approval/input hooks route through existing `ApprovalRequest`/`InputRequest` dataclasses. `cancel` uses SDK's native cancel; if the SDK only exposes `asyncio.CancelledError`, the turn worker thread sets a `threading.Event` checked at the SDK integration boundary.
-- Opencode backend (`src/vcws/agents/opencode.py`):
+- Codex backend (`src/cws/agents/codex.py`): ported from current `codex_app_server.py`; `AgentTurn.cancel` sends `turn/cancel` JSON-RPC; `kill` terminates subprocess and resets `_process`/`_pending`. `thread_id` stays **internal** to codex backend, persisted via the renamed state field.
+- Claude-code backend (`src/cws/agents/claude_code.py`): wraps `claude-agent-sdk` (optional dep). `AgentTurn` drives SDK's async interface via `asyncio.run()` inside a worker thread (matches existing sync service contract). Approval/input hooks route through existing `ApprovalRequest`/`InputRequest` dataclasses. `cancel` uses SDK's native cancel; if the SDK only exposes `asyncio.CancelledError`, the turn worker thread sets a `threading.Event` checked at the SDK integration boundary.
+- Opencode backend (`src/cws/agents/opencode.py`):
   - Spawns `opencode serve --port <random-loopback-only>` on `127.0.0.1` exclusively
   - Generates a per-run token, passes via `--auth-token` if supported, otherwise verifies loopback-only binding + socket-level ACL via `SO_PEERCRED` (Linux) / process-owner check (macOS)
   - `AgentTurn.supports_cancel = True` if HTTP abort endpoint responds; else `False`
   - `AgentTurn.supports_approval = False` always; tool calls rejected unless `--allow-auto-approve` was set at `serve` startup
   - Sends a **capability banner** to Feishu at `serve` startup: "opencode 模式：审批不支持；/cancel 能力待运行时探测；建议用 /kill 终止"
-- Factory `create_backend(config)` in `src/vcws/agents/__init__.py` dispatches by `config.agent.agent_type`.
+- Factory `create_backend(config)` in `src/cws/agents/__init__.py` dispatches by `config.agent.agent_type`.
 
 ### Goal 2 — CLI parameterization
 - `__main__.py`: `serve` subcommand gains `--agent {codex,claude-code,opencode}` (required; no env default), `--workspace PATH` (optional), `--allow-auto-approve` (opencode only; default False), `--force` (allow takeover of stale lockfile)
@@ -87,13 +87,13 @@ Cross-reference to spec acceptance criteria; each section below maps to one feat
 - `doctor` subcommand gains optional `--agent X`; validates X's dependencies (importable SDK / command available); exits non-zero with install hint if missing.
 
 ### Goal 3 — Foreground terminal + stop semantics
-- `src/vcws/terminal_sink.py`: thread-safe stdout writer guarded by `threading.Lock`; each `write_line(line)` call is atomic (no torn ANSI); honors `NO_COLOR` env; prints timestamped lines for: agent deltas, Feishu inbound/outbound, status transitions, errors.
+- `src/cws/terminal_sink.py`: thread-safe stdout writer guarded by `threading.Lock`; each `write_line(line)` call is atomic (no torn ANSI); honors `NO_COLOR` env; prints timestamped lines for: agent deltas, Feishu inbound/outbound, status transitions, errors.
 - `BridgeService` injects sink via DI; sink consumed inside `publish_status` and around adapter calls.
-- `src/vcws/lockfile.py`:
+- `src/cws/lockfile.py`:
   - `acquire(runtime_dir, force: bool = False) -> Lock` writes PID atomically (`O_EXCL`)
   - If an existing lockfile is found:
     - Live PID (`os.kill(pid, 0)` succeeds) → **always refuse** (exit non-zero with PID, agent, workspace of existing process)
-    - Stale PID (signal 0 raises `ProcessLookupError`) → **refuse unless `force=True` or env `VCWS_TAKEOVER_STALE=1`**; log WARN with old PID + lockfile mtime on takeover
+    - Stale PID (signal 0 raises `ProcessLookupError`) → **refuse unless `force=True` or env `CWS_TAKEOVER_STALE=1`**; log WARN with old PID + lockfile mtime on takeover
   - `release()` idempotent, registered on `atexit` and SIGINT/SIGTERM handler
 - `service.py` command router: before existing flow in `handle_message`, check `message.text.strip()`:
   - `/cancel` or `/stop` → `_handle_cancel(conversation)`
@@ -109,12 +109,12 @@ All criteria from `.omc/specs/deep-interview-v0.2.md` §"Acceptance Criteria" ar
 - [ ] `pytest` green (including new unit tests below)
 - [ ] `ruff check` clean on all new/modified files
 - [ ] `pyproject.toml` version bumped to `0.2.0`
-- [ ] Module `src/vcws/agents/` exists with `base.py`, `codex.py`, `claude_code.py`, `opencode.py`, `__init__.py`
-- [ ] Running `python -m vcws serve` without `--agent` prints argparse error listing valid values
-- [ ] Running `python -m vcws serve --agent codex --workspace /x` while `CWS_DEFAULT_WORKSPACE=/y` with `/x != /y` exits non-zero with explicit conflict message
-- [ ] `python -m vcws doctor --agent claude-code` exits 0 iff `claude_agent_sdk` importable; otherwise non-zero with `pip install` hint
+- [ ] Module `src/cws/agents/` exists with `base.py`, `codex.py`, `claude_code.py`, `opencode.py`, `__init__.py`
+- [ ] Running `python -m cws serve` without `--agent` prints argparse error listing valid values
+- [ ] Running `python -m cws serve --agent codex --workspace /x` while `CWS_DEFAULT_WORKSPACE=/y` with `/x != /y` exits non-zero with explicit conflict message
+- [ ] `python -m cws doctor --agent claude-code` exits 0 iff `claude_agent_sdk` importable; otherwise non-zero with `pip install` hint
 - [ ] Second `serve` against **live** lockfile exits non-zero **before binding Feishu WebSocket** (measured: no `Feishu websocket mode active.` ever printed by second process); exit message contains existing PID, agent, workspace
-- [ ] Second `serve` against **stale** lockfile exits non-zero **unless** `--force` or `VCWS_TAKEOVER_STALE=1`; on takeover, WARN line contains old PID and stale lockfile mtime
+- [ ] Second `serve` against **stale** lockfile exits non-zero **unless** `--force` or `CWS_TAKEOVER_STALE=1`; on takeover, WARN line contains old PID and stale lockfile mtime
 - [ ] `/cancel` handler: mock adapter records exactly **zero** `update_card` calls and **one** `send_result` (or equivalent "new message") call during the handler; fake backend's `AgentTurn.cancel()` invocation count == 1
 - [ ] `/kill` path: fake backend's `kill()` invocation count == 1; worker thread joins within 3 s (asserted via `threading.Event.wait(timeout=3.5)`); all persisted `agent_thread_id` values for active bindings are `None` after the call; subsequent `handle_message` produces a new non-matching thread id (asserted via two consecutive outcomes with `outcome.thread_id` differing)
 - [ ] Opencode without `--allow-auto-approve`: tool-approval callback path returns a deny response and Feishu receives explanatory message (one assertion per contract-test)
@@ -127,14 +127,14 @@ All criteria from `.omc/specs/deep-interview-v0.2.md` §"Acceptance Criteria" ar
 ## Implementation Steps
 
 ### Phase 2a — Abstraction layer (no behavior change for codex)
-1. Create `src/vcws/agents/__init__.py` exposing `AgentBackend`, `AgentTurn`, `CancelNotSupported`, `create_backend(config)`.
-2. Create `src/vcws/agents/base.py`: declare `AgentBackend` and `AgentTurn` Protocols per the design above; `CancelNotSupported(Exception)`.
-3. Create `src/vcws/agents/codex.py`: port `CodexAppServerClient` + `CodexAppServerBackend`; implement `begin_turn` by constructing a `CodexAgentTurn` object that wraps the existing `process_turn` logic and exposes `cancel()` (JSON-RPC `turn/cancel`) + context-manager semantics; `kill()` terminates subprocess and clears `_process`/`_pending`.
-4. Keep `src/vcws/codex_app_server.py` as a shim module that re-exports `CodexBackend = AgentBackend` + `CodexAppServerBackend` from `agents.codex` — **explicitly documents no pickle compatibility** in module docstring. Scheduled for removal in 0.3.
-5. Update `src/vcws/service.py`: type hint `CodexBackend → AgentBackend`; refactor `_run_turn` to `with self.backend.begin_turn(...) as turn:`; capture `turn` into a `_active_turns: dict[session_key, AgentTurn]` (lock-guarded) so `_handle_cancel` can reach it.
+1. Create `src/cws/agents/__init__.py` exposing `AgentBackend`, `AgentTurn`, `CancelNotSupported`, `create_backend(config)`.
+2. Create `src/cws/agents/base.py`: declare `AgentBackend` and `AgentTurn` Protocols per the design above; `CancelNotSupported(Exception)`.
+3. Create `src/cws/agents/codex.py`: port `CodexAppServerClient` + `CodexAppServerBackend`; implement `begin_turn` by constructing a `CodexAgentTurn` object that wraps the existing `process_turn` logic and exposes `cancel()` (JSON-RPC `turn/cancel`) + context-manager semantics; `kill()` terminates subprocess and clears `_process`/`_pending`.
+4. Keep `src/cws/codex_app_server.py` as a shim module that re-exports `CodexBackend = AgentBackend` + `CodexAppServerBackend` from `agents.codex` — **explicitly documents no pickle compatibility** in module docstring. Scheduled for removal in 0.3.
+5. Update `src/cws/service.py`: type hint `CodexBackend → AgentBackend`; refactor `_run_turn` to `with self.backend.begin_turn(...) as turn:`; capture `turn` into a `_active_turns: dict[session_key, AgentTurn]` (lock-guarded) so `_handle_cancel` can reach it.
 
 ### Phase 2b — Config + CLI
-6. Refactor `src/vcws/config.py`: split `CodexConfig` into `AgentConfig` base (`agent_type`) + per-agent subclasses (`CodexAgentConfig` keeps current fields; `ClaudeCodeAgentConfig`/`OpencodeAgentConfig` declare theirs). `AppConfig.agent: AgentConfig`.
+6. Refactor `src/cws/config.py`: split `CodexConfig` into `AgentConfig` base (`agent_type`) + per-agent subclasses (`CodexAgentConfig` keeps current fields; `ClaudeCodeAgentConfig`/`OpencodeAgentConfig` declare theirs). `AppConfig.agent: AgentConfig`.
 7. Add `AppConfig.from_sources(args, env)`:
    - CLI > env precedence; conflict = `ConfigConflictError` surfaced as exit 2
    - Deserializes per-agent fields from env
@@ -143,8 +143,8 @@ All criteria from `.omc/specs/deep-interview-v0.2.md` §"Acceptance Criteria" ar
    - `doctor` adds optional `--agent`; dependency check per agent type
 
 ### Phase 2c — Lockfile + terminal sink
-9. Create `src/vcws/lockfile.py` per design: live-PID refusal; stale-PID requires `force` or env; atomic `O_EXCL` write; `release()` idempotent; atexit + signal cleanup.
-10. Create `src/vcws/terminal_sink.py`: `TerminalSink` class with `write_line(str)` (lock-guarded atomic write + flush); `NO_COLOR` honored; timestamp format `%H:%M:%S.%f` truncated to ms.
+9. Create `src/cws/lockfile.py` per design: live-PID refusal; stale-PID requires `force` or env; atomic `O_EXCL` write; `release()` idempotent; atexit + signal cleanup.
+10. Create `src/cws/terminal_sink.py`: `TerminalSink` class with `write_line(str)` (lock-guarded atomic write + flush); `NO_COLOR` honored; timestamp format `%H:%M:%S.%f` truncated to ms.
 11. Wire sink into `__main__.py` (serve entry, pass to service) and `BridgeService` (publish_status and adapter-send shims).
 
 ### Phase 2d — Stop-command routing
@@ -160,11 +160,11 @@ All criteria from `.omc/specs/deep-interview-v0.2.md` §"Acceptance Criteria" ar
 15. SIGINT/SIGTERM handler: set the active turn's `kill_event`, call `backend.kill()`, release lockfile, `sys.exit(0)`.
 
 ### Phase 2e — New agent backends
-16. Implement `src/vcws/agents/claude_code.py`:
+16. Implement `src/cws/agents/claude_code.py`:
     - Detect `claude_agent_sdk`; raise clear ImportError with install hint if missing.
     - Wrap SDK's async interface in a worker-thread event loop; `AgentTurn.cancel()` sets a `threading.Event` and issues SDK cancel.
     - Translate SDK events to `ApprovalRequest` / `InputRequest` + `ProgressUpdate` deltas.
-17. Implement `src/vcws/agents/opencode.py`:
+17. Implement `src/cws/agents/opencode.py`:
     - Spawn `opencode serve --port <random>` on `127.0.0.1`; read stdout until it prints "ready"-equivalent; fail with clear message after 5 s timeout.
     - Confirm loopback-only binding; if `--auth-token` unsupported, log the socket-owner check result.
     - Probe for abort endpoint; set `AgentTurn.supports_cancel` accordingly.
@@ -173,7 +173,7 @@ All criteria from `.omc/specs/deep-interview-v0.2.md` §"Acceptance Criteria" ar
 18. Escape hatch: if opencode subprocess fails to come up across 3 retries with exponential backoff, `serve --agent opencode` exits non-zero with diagnostic; `doctor --agent opencode` performs the same check dry-run. Document in `README.md` and `CHANGELOG.md`.
 
 ### Phase 2f — State migration + version + release notes
-19. `src/vcws/state.py`: on load, if `codex_thread_id` field present rename to `agent_thread_id`; write updated file back atomically; dedicated migration tested in `tests/test_state_migration.py`.
+19. `src/cws/state.py`: on load, if `codex_thread_id` field present rename to `agent_thread_id`; write updated file back atomically; dedicated migration tested in `tests/test_state_migration.py`.
 20. Bump `pyproject.toml` to `0.2.0`. Add optional deps: `[project.optional-dependencies] claude = ["claude-agent-sdk>=<version>"]`; `opencode = []` (binary-only dep documented in README).
 21. Update `README.md`: new CLI, commands, agents, capability table, rollback guidance ("to revert to 0.1, `pip install vibe-coding-while-shit==0.1.0` — state file forward-compatible only").
 22. Add `CHANGELOG.md` entry for 0.2 with BREAKING CHANGES block (CLI now requires `--agent`; state field rename).
@@ -199,7 +199,7 @@ All criteria from `.omc/specs/deep-interview-v0.2.md` §"Acceptance Criteria" ar
 1. `ruff check src tests` — clean
 2. `pytest` — all green
 3. **Automated parity contract test** (`tests/test_agent_parity.py`): a parametrized test that runs the same scripted scenario against a `FakeCodex`, `FakeClaudeCode`, `FakeOpencode` (each subclass the real backends with injected transport seams) — scenario: start turn → receive 2 deltas → cancel → outcome is `interrupted` → next turn reuses thread for codex/claude-code, opens fresh for opencode.
-4. **Manual smoke (codex)**: `python -m vcws serve --agent codex --workspace .`; send Feishu test; observe stdout; `/cancel`; next message retains thread; `/kill`; next message new thread; Ctrl+C exits 0.
+4. **Manual smoke (codex)**: `python -m cws serve --agent codex --workspace .`; send Feishu test; observe stdout; `/cancel`; next message retains thread; `/kill`; next message new thread; Ctrl+C exits 0.
 5. **Manual smoke (claude-code)**: same as #4.
 6. **Manual smoke (opencode)**: same as #4 or verify fail-fast path if opencode unavailable.
 7. **Regression**: 0.1 `/workspace`, `/status`, approval card, input card under `--agent codex` all behave identically — captured by `test_regression_0_1.py` that diffs Feishu API calls against a recorded 0.1 trace.
@@ -225,7 +225,7 @@ All criteria from `.omc/specs/deep-interview-v0.2.md` §"Acceptance Criteria" ar
 - **Adopted Option B′** synthesis (AgentTurn context manager) instead of Option A; removed `thread_id` from Protocol (Architect #1 / Critic #1).
 - **Opencode capability banner at startup** + `/cancel` references it; no silent `NotImplementedError` (Architect #2 / Critic #2).
 - **`--allow-auto-approve` flag** required for opencode tool calls; default denies (Architect #3 / Critic #3).
-- **Stale lockfile takeover** requires `--force` or `VCWS_TAKEOVER_STALE=1`; live PID always refuses (Architect #4 / Critic #4).
+- **Stale lockfile takeover** requires `--force` or `CWS_TAKEOVER_STALE=1`; live PID always refuses (Architect #4 / Critic #4).
 - **`_handle_kill` releases conversation lock before joining worker**; kill-signal event prevents deadlock (Architect #5a / Critic #5).
 - **State migration** for `codex_thread_id` → `agent_thread_id` with `.bak` preservation (Architect #5b / Critic #6).
 - **Shim documents no pickle compatibility**; scheduled removal in 0.3 (Architect #5c / Critic #7).

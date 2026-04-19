@@ -1,7 +1,7 @@
 import io
 import re
 import threading
-from vcws.terminal_sink import TerminalSink
+from cws.terminal_sink import TerminalSink
 
 
 def test_write_line_basic():
