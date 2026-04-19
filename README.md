@@ -2,187 +2,172 @@
 
 通过飞书 WebSocket 远程驱动本机 AI 编程助手（codex / claude-code / opencode）的轻量桥接服务。
 
-## 1. 项目概览
+## 项目概览
 
-v0.2 引入多 Agent 支持。你可以在同一套飞书入口下选择三种 Agent 后端之一来驱动本地编程任务：
+在同一套飞书入口下选择三种 Agent 后端之一驱动本地编程任务：
 
 - **claude-code** — 通过 `claude-agent-sdk` 驱动，完整能力（默认）
 - **codex** — JSON-RPC app-server，完整能力
-- **opencode** — loopback HTTP 模式，能力受限（审批需要 `--allow-auto-approve`）
+- **opencode** — loopback HTTP，能力受限（审批需要 `--allow-auto-approve`）
 
-服务做三件事：
+服务接收飞书消息和交互事件、把会话绑定到工作目录与 Agent thread、在需要时把确认/补充信息回流给飞书。运行时状态默认写到 `.omx/runtime/bridge-state.json`。
 
-- 接收飞书消息和交互事件
-- 把会话绑定到工作目录和 Agent thread
-- 在需要时把确认/补充信息回流给飞书
-
-它是一个单机、单飞书入口的 MVP 形态，适合把"人在飞书里操作 AI 编程助手"这条链路跑稳。
-
-## 2. 架构概览
-
-- **Feishu WebSocket gateway**：处理飞书事件入口
-- **Bridge service**：维护会话、工作目录、状态、恢复信息
-- **Agent 后端**：与所选 Agent 进程通信（codex / claude-code / opencode 均可作为后端）
-
-Bridge 是 Agent-agnostic 的；codex 是三个后端之一。运行时状态默认写到 `.omx/runtime/bridge-state.json`。
-
-## 3. 前置条件
-
-- Python 3.11+
-- 所选 Agent 命令可用（`codex`、`claude`、`opencode`）
-- 一个可写的本地工作目录
-- 飞书开放平台应用的 **App ID** 和 **App Secret**
-- 已安装依赖（`lark-oapi` 和 `claude-agent-sdk` 会随 `pip install -e .` 一起装好）
-
-## 4. Quick Start
+## Quick Start
 
 ```bash
 pip install -e .          # 或 uv pip install -e .
-cws init                 # 生成 .env 与 workspace
+cws init                  # 生成 .env 与 workspace
 # 编辑 .env，填入 FEISHU_APP_ID / FEISHU_APP_SECRET
-cws doctor               # 可选：自检 Feishu 凭证 + agent 依赖
-cws serve                # 默认 claude-code，自动后台运行
-cws status               # 查看运行状态（pid / agent / workspace）
-cws stop                 # 优雅停止（SIGTERM → 5s 超时 → SIGKILL）
-cws restart              # 等价于 stop + serve
+cws doctor                # 自检 Feishu 凭证 + agent 依赖
+cws serve                 # 默认 claude-code，自动后台运行
+cws status                # 查看运行状态
+cws stop                  # 优雅停止
+cws restart               # stop + serve
 ```
 
-`cws serve` 默认会 fork 到后台，shell 提示符立即返回；日志写到 `.omx/runtime/serve.log`（也就是 `$CWS_RUNTIME_DIR/serve.log`）。需要前台运行（例如调试或在 systemd / Docker 里跑）时加 `--foreground`。
+`cws serve` 默认 fork 到后台，日志写到 `$CWS_RUNTIME_DIR/serve.log`；前台运行加 `--foreground`。切换 agent：`cws serve --agent codex` 或 `cws serve --agent opencode --allow-auto-approve`。`.env` 自动加载（**勿 commit**）。
 
-需要其它 agent 时：`cws serve --agent codex` 或 `cws serve --agent opencode --allow-auto-approve`。
-
-`.env` 会被自动加载（显式 `export` 的环境变量优先级更高）。**请勿 commit `.env`** — 仓库默认把它加进了 `.gitignore`。老写法 `python3 -m cws ...` 和显式 `export FEISHU_APP_ID=...` 依然可用。
-
-`doctor` 通过时会输出：
-
-```text
-配置看起来可启动（Feishu WebSocket mode）。
-```
-
-`serve` 启动后会输出：
-
-```text
-Feishu websocket mode active.
-```
-
-## 5. 飞书应用配置
-
-不需要配置 webhook callback URL、verification token 或 encrypt key。
-
-在飞书开放平台里：
-
-1. 创建应用并拿到 **App ID** 和 **App Secret**
-2. 开启 **Bot** 能力
-3. 在 **Event Subscription** 中选择 **长连接（WebSocket）**
-4. 至少订阅 `im.message.receive_v1`
-5. 如果要用确认卡片，确保卡片交互能力可用
-
-## 6. 日常使用 / 操作流程
-
-1. 先跑 `doctor`
-2. 再跑 `serve --agent <agent>`
-3. 直接给机器人发消息，启动一个 Agent 任务
-4. 后续消息会继续沿用当前会话绑定的 Agent thread
-5. Agent 要你补充信息时，直接回复文本
-6. Agent 要你确认时，在卡片里完成确认/拒绝
-7. 用 `/workspace <path>` 切换当前会话的工作目录
-8. 用 `/status` 查看当前 transport、会话、工作目录、Agent thread 和最近事件
-
-补充：
-
-- `/workspace <path>` 会把路径解析为绝对路径，并在不存在时创建目录
-- 如果设置了 `FEISHU_ALLOWED_USERS`，只有名单里的 `open_id` 能操作；不设置则不限制
-
-## 7. 命令与环境变量
-
-### CLI 命令
+## CLI 命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `cws init [--workspace PATH] [--agent X]` | 生成模板 `.env` 并创建 workspace 目录（默认 agent = `claude-code`） |
-| `cws doctor [--agent X]` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`lark-oapi` 及 Agent 依赖是否可用。不传 `--agent` 时遍历所有 agent，仅 Feishu 问题会失败 |
-| `cws serve [--agent {codex,claude-code,opencode}] [--workspace PATH] [--allow-auto-approve] [--force] [--foreground]` | 启动飞书 WebSocket bridge；默认 fork 到后台并把日志写到 `.omx/runtime/serve.log`，加 `--foreground` 在前台运行；`--agent` 未传时取 `$CWS_AGENT`，仍未设置则使用 `claude-code` |
-| `cws status` | 显示当前 serve 进程（pid / agent / workspace / lockfile 路径） |
-| `cws stop [--timeout S]` | 给 serve 进程发 SIGTERM，超时（默认 5s）后 SIGKILL，并清理 lockfile |
-| `cws restart [serve 选项] [--timeout S]` | 先 stop 再 serve；同样支持 `--foreground` |
+| `cws init [--workspace PATH] [--agent X]` | 生成模板 `.env` 并创建 workspace 目录 |
+| `cws doctor [--agent X]` | 检查 Feishu 凭证、`lark-oapi` 及 Agent 依赖 |
+| `cws serve [--agent X] [--workspace PATH] [--allow-auto-approve] [--force] [--foreground]` | 启动飞书 WebSocket bridge |
+| `cws status` | 显示当前 serve 进程（pid / agent / workspace） |
+| `cws stop [--timeout S]` | SIGTERM → 超时后 SIGKILL，并清理 lockfile |
+| `cws restart [serve 选项] [--timeout S]` | 先 stop 再 serve |
 
-### 停止命令 / Stop commands
+### 会话内命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `/cancel` 或 `/stop` | 打断当前 turn，保留 thread |
-| `/kill` 或 `/clear` | 硬杀 Agent 进程，下一条消息开新 thread |
-| Ctrl+C | 优雅退出整个服务 |
+| `/workspace <path>` | 切换当前会话工作目录 |
+| `/status` | 查看 transport / 会话 / Agent thread / 最近事件 |
+| `/cancel`、`/stop` | 打断当前 turn，保留 thread |
+| `/kill`、`/clear` | 硬杀 Agent 进程，下一条消息开新 thread |
 
-### Agent 能力对比 / Capability matrix
+### Agent 能力对比
 
 | Agent | 审批卡片 | 增量打印 | /cancel | /kill |
-|-------|----------|----------|---------|-------|
+|---|---|---|---|---|
 | codex | ✅ | ✅ | ✅ | ✅ |
 | claude-code | ✅ | ✅ | ✅ | ✅ |
-| opencode | ⚠️ 需要 --allow-auto-approve | ✅ | ⚠️ 首次使用时探测 | ✅ |
+| opencode | ⚠️ 需 `--allow-auto-approve` | ✅ | ⚠️ 首次探测 | ✅ |
 
-### 并发约束 / Single-instance invariant
+一个飞书 bot 一次只能有一个 `serve`，由 `.omx/runtime/serve.lock` 强制；stale lockfile 需要 `--force` 或 `CWS_TAKEOVER_STALE=1` 接管。
 
-一个飞书 bot 一次只能有一个 `serve` 进程，通过 `.omx/runtime/serve.lock` 强制。
+## 环境变量
 
-- 第二个 `serve` 启动会被拒绝，并打印现有进程的 PID。
-- Stale lockfile 需要 `--force` 或 `CWS_TAKEOVER_STALE=1` 才能接管。
-
-### 升级与回滚 / Upgrade & rollback
-
-**升级：**
-```bash
-pip install code-while-shit==0.2.0
-```
-状态文件会自动迁移；`bridge-state.json.bak` 保留作为回退备份。
-
-**回滚：**
-```bash
-pip install code-while-shit==0.1.0
-```
-0.1 读不了新的 `agent_thread_id` 字段，会当作新 thread 开始；不影响正常运行。
-
-### Feishu / 运行目录
-
-| 环境变量 | 默认值 | 作用 |
+| 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `FEISHU_APP_ID` | 无 | 飞书应用 ID；`doctor` 和 `serve` 都需要 |
-| `FEISHU_APP_SECRET` | 无 | 飞书应用 Secret；`doctor` 和 `serve` 都需要 |
-| `FEISHU_DOMAIN` | `https://open.feishu.cn` | 飞书 API 域名；国际版可改成对应 Lark 域名 |
-| `FEISHU_BASE_URL` | `${FEISHU_DOMAIN}/open-apis` | 飞书 Open API 基址 |
-| `FEISHU_ALLOWED_USERS` | 空 | 逗号分隔的 `open_id` allowlist；为空表示不限制 |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | — | 飞书应用凭证（必需） |
+| `FEISHU_DOMAIN` | `https://open.feishu.cn` | 飞书 API 域名（Lark 国际版可改） |
+| `FEISHU_BASE_URL` | `${FEISHU_DOMAIN}/open-apis` | Open API 基址 |
+| `FEISHU_ALLOWED_USERS` | 空 | 逗号分隔 `open_id` allowlist；空=不限制 |
 | `CWS_DEFAULT_WORKSPACE` | `.` | 默认工作目录 |
-| `CWS_RUNTIME_DIR` | `.omx/runtime` | 运行时目录；状态文件写在这里 |
+| `CWS_RUNTIME_DIR` | `.omx/runtime` | 运行时目录 |
+| `CWS_AGENT` | `claude-code` | 默认 agent |
+| `CODEX_*` | — | Codex 后端配置（`CODEX_COMMAND` / `CODEX_MODEL` / `CODEX_APPROVAL_POLICY` / `CODEX_SANDBOX` 等） |
 
-### Codex
-
-| 环境变量 | 默认值 | 作用 |
-| --- | --- | --- |
-| `CODEX_COMMAND` | `codex` | 启动 Codex app-server 的可执行文件 |
-| `CODEX_APP_SERVER_ARGS` | `app-server` | 传给 Codex 的 app-server 参数，按空格切分 |
-| `CODEX_MODEL` | `gpt-5.4` | 传给 Codex 的模型 |
-| `CODEX_APPROVAL_POLICY` | `on-request` | Codex approval policy |
-| `CODEX_APPROVALS_REVIEWER` | `user` | Codex approvals reviewer |
-| `CODEX_SANDBOX` | `workspace-write` | Codex sandbox 模式 |
-| `CODEX_SERVICE_TIER` | 空 | Codex service tier；不设置则不传 |
-
-## 8. 开发与测试
+## 开发与测试
 
 ```bash
-python3 -m pip install -e .
-python3 -m cws doctor
-python3 -m unittest discover -s tests -p 'test_*.py'
+uv pip install -e .
+uv run pytest
 ```
 
-## 9. 已知限制 / 排障
+## 升级与回滚
 
-- 目前只支持 **Feishu WebSocket** 入口，不支持 webhook 主路径
-- `serve` 启动前必须有 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
-- `serve` 的 `--agent` 可选；未传时回落到 `$CWS_AGENT`，再回落到 `claude-code`
-- 如果 `FEISHU_ALLOWED_USERS` 被设置，名单外用户会被拒绝
-- 如果 `/status` 里显示没有活跃 thread，说明这个会话还没真正开始过任务
-- 重启恢复会沿用同一会话的 Agent thread；它不是"回到中断 RPC 的精确现场"
-- `CWS_RUNTIME_DIR` 和 `CWS_DEFAULT_WORKSPACE` 必须可写
-- 如果 `doctor` 失败，先看是否缺少依赖、`FEISHU_APP_ID` 或 `FEISHU_APP_SECRET`
-- 如果 `serve` 先打印 active，随后又报 Feishu 连接错误，优先检查 WebSocket 订阅、`FEISHU_DOMAIN` / `FEISHU_BASE_URL` 和网络可达性
+```bash
+pip install code-while-shit==0.2.0   # 升级；状态文件自动迁移，留 .bak
+pip install code-while-shit==0.1.0   # 回滚；0.1 忽略新字段，不影响运行
+```
+
+---
+
+# code-while-shit — v0.2 (English)
+
+Lightweight bridge that lets you drive local AI coding assistants (codex / claude-code / opencode) remotely via Feishu WebSocket.
+
+## Overview
+
+Pick one of three agent backends behind the same Feishu entry:
+
+- **claude-code** — driven via `claude-agent-sdk`, full capabilities (default)
+- **codex** — JSON-RPC app-server, full capabilities
+- **opencode** — loopback HTTP, reduced (approvals need `--allow-auto-approve`)
+
+The service receives Feishu messages/interactions, binds sessions to a workspace and an agent thread, and surfaces confirmation/follow-up requests back to Feishu. Runtime state defaults to `.omx/runtime/bridge-state.json`.
+
+## Quick Start
+
+```bash
+pip install -e .          # or: uv pip install -e .
+cws init                  # scaffold .env and workspace
+# edit .env: fill in FEISHU_APP_ID / FEISHU_APP_SECRET
+cws doctor                # validate Feishu creds + agent deps
+cws serve                 # default claude-code, runs in background
+cws status                # show current serve process
+cws stop                  # graceful stop
+cws restart               # stop + serve
+```
+
+`cws serve` forks to background by default and writes logs to `$CWS_RUNTIME_DIR/serve.log`; pass `--foreground` to run in foreground. Switch agents with `cws serve --agent codex` or `cws serve --agent opencode --allow-auto-approve`. `.env` is auto-loaded (**do not commit**).
+
+## CLI
+
+| Command | Purpose |
+| --- | --- |
+| `cws init [--workspace PATH] [--agent X]` | Scaffold `.env` template and workspace |
+| `cws doctor [--agent X]` | Validate Feishu creds, `lark-oapi`, and agent deps |
+| `cws serve [--agent X] [--workspace PATH] [--allow-auto-approve] [--force] [--foreground]` | Start the Feishu WebSocket bridge |
+| `cws status` | Show running serve (pid / agent / workspace) |
+| `cws stop [--timeout S]` | SIGTERM, SIGKILL on timeout, cleans lockfile |
+| `cws restart [serve flags] [--timeout S]` | stop + serve |
+
+### In-session commands
+
+| Command | Purpose |
+| --- | --- |
+| `/workspace <path>` | Switch the current session's workspace |
+| `/status` | Show transport / session / agent thread / recent events |
+| `/cancel`, `/stop` | Cancel current turn, keep the thread |
+| `/kill`, `/clear` | Tear down the agent process; next message starts fresh |
+
+### Capability matrix
+
+| Agent | Approvals | Streaming | /cancel | /kill |
+|---|---|---|---|---|
+| codex | ✅ | ✅ | ✅ | ✅ |
+| claude-code | ✅ | ✅ | ✅ | ✅ |
+| opencode | ⚠️ needs `--allow-auto-approve` | ✅ | ⚠️ probed on first use | ✅ |
+
+One Feishu bot allows only one `serve` at a time, enforced by `.omx/runtime/serve.lock`. Stale lockfiles require `--force` or `CWS_TAKEOVER_STALE=1` to take over.
+
+## Environment variables
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | — | Feishu app credentials (required) |
+| `FEISHU_DOMAIN` | `https://open.feishu.cn` | Feishu API domain (override for Lark) |
+| `FEISHU_BASE_URL` | `${FEISHU_DOMAIN}/open-apis` | Open API base URL |
+| `FEISHU_ALLOWED_USERS` | empty | Comma-separated `open_id` allowlist; empty = unrestricted |
+| `CWS_DEFAULT_WORKSPACE` | `.` | Default workspace |
+| `CWS_RUNTIME_DIR` | `.omx/runtime` | Runtime directory |
+| `CWS_AGENT` | `claude-code` | Default agent |
+| `CODEX_*` | — | Codex backend (`CODEX_COMMAND` / `CODEX_MODEL` / `CODEX_APPROVAL_POLICY` / `CODEX_SANDBOX`, etc.) |
+
+## Develop & test
+
+```bash
+uv pip install -e .
+uv run pytest
+```
+
+## Upgrade & rollback
+
+```bash
+pip install code-while-shit==0.2.0   # upgrade; state auto-migrates, .bak kept
+pip install code-while-shit==0.1.0   # rollback; 0.1 ignores new fields safely
+```
