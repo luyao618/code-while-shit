@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.2.2 (2026-04-19)
+
+### Changed
+- **claude-code now uses a persistent `ClaudeSDKClient`** instead of spawning a fresh `claude` CLI subprocess per turn. The backend keeps one client per `(conversation, workspace)` alive on a dedicated background asyncio loop, so multi-turn context is preserved by the live process — no more `--resume` round-trip and no more "Command failed with exit code 1 / Check stderr output for details" caused by Claude CLI rejecting an unknown session id. `/kill` and `/clear` disconnect all live clients to start fresh.
+
+### Fixed
+- claude-code multi-turn conversations actually carry context now. The previous attempt (0.2.1) tried to forward `session_id` via `ClaudeAgentOptions(resume=...)`, but the resumed CLI subprocess didn't always have access to the stored session jsonl, leading to immediate exit-code-1 failures and / or new conversations on every Feishu message. The persistent-client approach avoids the entire resume code path.
+
 ## 0.2.1 (2026-04-19)
 
 ### Added

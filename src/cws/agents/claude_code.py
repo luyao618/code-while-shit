@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from concurrent.futures import Future
 from typing import Any, Callable
 
 from ..models import (
@@ -34,6 +35,71 @@ def _import_sdk():
         raise ClaudeCodeImportError() from e
 
 
+class _LoopThread:
+    """Owns a dedicated asyncio loop on a background thread.
+
+    `ClaudeSDKClient` requires that connect()/query()/disconnect() all execute
+    in the same async runtime context (it holds a persistent anyio task group
+    from connect to disconnect). Our service spawns turns from worker threads
+    and previously created a fresh `asyncio.new_event_loop()` per turn, which
+    made cross-turn client reuse impossible. This helper hosts a single loop
+    that lives for the backend's lifetime so one `ClaudeSDKClient` per
+    conversation can stay connected and accumulate context across turns.
+    """
+
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self._lock = threading.Lock()
+
+    def _ensure_started(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._loop is not None and self._thread is not None and self._thread.is_alive():
+                return self._loop
+            loop = asyncio.new_event_loop()
+            self._loop = loop
+
+            def _run() -> None:
+                asyncio.set_event_loop(loop)
+                self._ready.set()
+                try:
+                    loop.run_forever()
+                finally:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
+
+            self._ready.clear()
+            self._thread = threading.Thread(
+                target=_run, name="claude-code-sdk-loop", daemon=True
+            )
+            self._thread.start()
+            self._ready.wait()
+            return loop
+
+    def run(self, coro) -> Any:
+        loop = self._ensure_started()
+        fut: Future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return fut.result()
+
+    def submit(self, coro) -> Future:
+        loop = self._ensure_started()
+        return asyncio.run_coroutine_threadsafe(coro, loop)
+
+    def shutdown(self) -> None:
+        with self._lock:
+            loop = self._loop
+            thread = self._thread
+            self._loop = None
+            self._thread = None
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
+
+
 class ClaudeCodeAgentTurn(AgentTurn):
     agent_type = "claude-code"
     supports_cancel = True
@@ -64,10 +130,12 @@ class ClaudeCodeAgentTurn(AgentTurn):
         self.state = TurnState.RUNNING
         self.kill_event = threading.Event()
         self._cancel_event = threading.Event()
-        self._summary_chunks: list[str] = []
-        # session_id reported by the SDK during this turn; used to persist
-        # the conversation thread so subsequent turns resume the same context.
+        # session_id observed from the SDK during this turn; persisted as
+        # the binding's agent_thread_id (mostly for diagnostics now).
         self._observed_session_id: str | None = None
+        # Future representing the in-flight receive_response loop on the SDK
+        # loop thread. Used by cancel() to interrupt the client.
+        self._drain_future: Future | None = None
 
     def __enter__(self) -> "ClaudeCodeAgentTurn":
         self.state = TurnState.RUNNING
@@ -86,6 +154,14 @@ class ClaudeCodeAgentTurn(AgentTurn):
             return
         self.state = TurnState.CANCELLED
         self._cancel_event.set()
+        # Ask the SDK client to interrupt the in-flight turn so receive_response
+        # finishes promptly instead of waiting for the model to finish.
+        client = self._backend._peek_client(self._conversation)
+        if client is not None:
+            try:
+                self._backend._loop.submit(client.interrupt())
+            except Exception:
+                pass
 
     def deltas(self):
         # Optional; streaming already piped through publish_status
@@ -94,119 +170,70 @@ class ClaudeCodeAgentTurn(AgentTurn):
     def run(self) -> TurnOutcome:
         sdk = _import_sdk()
         text_parts: list[str] = []
-        # Default thread_id is the existing one (resume) or a placeholder until
-        # the SDK reports the real session_id. We update it from observed events.
-        thread_id = self._existing_thread_id or f"cc-{id(self)}"
 
         self._publish_status(ProgressUpdate("running", "处理中：claude-code 正在执行任务。"))
 
-        nonlocal_status: list[tuple[str, str | None]] = []
-
-        async def _drive() -> str:
-            status = "completed"
-            error = None
-            try:
-                async for event in self._iter_sdk(sdk):
-                    if self._cancel_event.is_set():
-                        status = "interrupted"
-                        break
-                    self._handle_event(event, text_parts)
-                self._publish_status(
-                    ProgressUpdate(
-                        "completed" if status == "completed" else "failed",
-                        "已完成" if status == "completed" else "已中断",
-                    )
-                )
-            except Exception as e:
-                status = "failed"
-                error = str(e)
-                self._publish_status(ProgressUpdate("failed", f"失败：{e}"))
-            nonlocal_status.append((status, error))
-            return "".join(text_parts)
-
-        loop = asyncio.new_event_loop()
-        summary: str = ""
+        status: str = "completed"
+        error: str | None = None
         try:
-            main_task = loop.create_task(_drive())
+            client = self._backend._get_or_connect_client(sdk, self._conversation, self._workspace_path)
 
-            def _watch():
-                if self._cancel_event.wait(timeout=None):
-                    if not main_task.done():
-                        loop.call_soon_threadsafe(main_task.cancel)
+            async def _drive() -> None:
+                await client.query(self._prompt)
+                async for event in client.receive_response():
+                    if self._cancel_event.is_set():
+                        return
+                    self._handle_event(event, text_parts)
 
-            t = threading.Thread(target=_watch, daemon=True)
-            t.start()
+            self._drain_future = self._backend._loop.submit(_drive())
             try:
-                summary = loop.run_until_complete(main_task)
-            except asyncio.CancelledError:
-                summary = "".join(text_parts)
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
+                self._drain_future.result()
+            except Exception as exc:
+                # If cancelled via interrupt() the SDK may raise. Distinguish
+                # by checking our cancel flag.
+                if self._cancel_event.is_set():
+                    status = "interrupted"
+                else:
+                    status = "failed"
+                    error = str(exc)
+                    self._publish_status(ProgressUpdate("failed", f"失败：{exc}"))
+            else:
+                if self._cancel_event.is_set():
+                    status = "interrupted"
+        except Exception as exc:
+            # Connection failure or import-time error.
+            status = "failed"
+            error = str(exc)
+            self._publish_status(ProgressUpdate("failed", f"失败：{exc}"))
 
-        status, error = nonlocal_status[0] if nonlocal_status else ("completed", None)
+        # Map to AgentTurn outcome status and emit a final progress update so
+        # the Feishu card flips out of "running".
         if self.state == TurnState.CANCELLED or status == "interrupted":
             outcome_status = "interrupted"
+            self._publish_status(ProgressUpdate("failed", "已中断"))
         elif status == "failed":
             outcome_status = "failed"
         else:
             outcome_status = "completed"
             self.state = TurnState.COMPLETED
+            self._publish_status(ProgressUpdate("completed", "已完成"))
 
-        # Prefer the real session_id observed from the SDK so the next turn
-        # can resume the same Claude Code conversation. Fall back to whatever
-        # we started with (resume id or placeholder) if the SDK never reported
-        # one (e.g. transport error before the first message).
-        final_thread_id = self._observed_session_id or thread_id
-
+        summary = "".join(text_parts)
+        # thread_id is informational only when using the persistent client —
+        # context lives in the live ClaudeSDKClient, not in --resume. We
+        # persist the observed session_id so /status can show something
+        # meaningful and so debugging / migration paths have an id to use.
+        thread_id = self._observed_session_id or self._existing_thread_id or f"cc-{id(self)}"
         return TurnOutcome(
-            thread_id=final_thread_id,
+            thread_id=thread_id,
             summary=summary.strip() or ("执行完成。" if outcome_status == "completed" else "执行结束。"),
             status=outcome_status,
             raw_text=summary,
             error=error,
         )
 
-    async def _iter_sdk(self, sdk):
-        """Iterate SDK events. Handles both streaming async generator and compat fallback."""
-        query = getattr(sdk, "query", None)
-        if query is not None:
-            opts_cls = getattr(sdk, "ClaudeAgentOptions", None)
-            options = None
-            if opts_cls is not None:
-                opts_kwargs: dict[str, Any] = {"cwd": self._workspace_path}
-                # Resume the previous Claude Code session when we have one,
-                # so multi-turn conversations actually share context instead
-                # of starting fresh on every message.
-                if self._existing_thread_id and not self._existing_thread_id.startswith("cc-"):
-                    opts_kwargs["resume"] = self._existing_thread_id
-                try:
-                    options = opts_cls(**opts_kwargs)
-                except TypeError:
-                    # Older SDKs may not accept `resume`; fall back to cwd-only.
-                    options = opts_cls(cwd=self._workspace_path)
-            async for msg in query(prompt=self._prompt, options=options):
-                yield msg
-            return
-        # Fallback: try ClaudeSDKClient async context manager
-        client_cls = getattr(sdk, "ClaudeSDKClient", None)
-        if client_cls is not None:
-            async with client_cls() as client:
-                await client.query(self._prompt)
-                async for msg in client.receive_response():
-                    yield msg
-            return
-        raise RuntimeError(
-            "claude_agent_sdk surface not recognized; expected query() or ClaudeSDKClient"
-        )
-
     def _handle_event(self, event: Any, text_parts: list[str]) -> None:
-        # Capture session_id from any event that carries one. SystemMessage
-        # ("init" subtype), AssistantMessage, ResultMessage and SessionMessage
-        # all expose it. We keep the first non-empty value we see; the SDK
-        # uses a single id per query() invocation.
+        # Capture session_id from any event that carries one.
         if self._observed_session_id is None:
             sid = getattr(event, "session_id", None)
             if not sid and isinstance(event, dict):
@@ -246,6 +273,70 @@ class ClaudeCodeAgentBackend(AgentBackend):
 
     def __init__(self, config):
         self._config = config
+        # One persistent ClaudeSDKClient per (conversation_key, workspace_path).
+        # Keyed by string so we don't pin ConversationRef instances. The client
+        # is responsible for retaining conversation context across turns — no
+        # --resume needed because the underlying CLI subprocess never exits
+        # between turns.
+        self._clients: dict[str, Any] = {}
+        self._clients_lock = threading.Lock()
+        self._loop = _LoopThread()
+
+    @staticmethod
+    def _client_key(conversation: ConversationRef, workspace_path: str) -> str:
+        return f"{conversation.channel}:{conversation.account_id}:{conversation.conversation_id}@{workspace_path}"
+
+    def _peek_client(self, conversation: ConversationRef) -> Any | None:
+        # Best-effort lookup used by cancel(); workspace is unknown here so we
+        # match by conversation prefix and return the first hit.
+        prefix = f"{conversation.channel}:{conversation.account_id}:{conversation.conversation_id}@"
+        with self._clients_lock:
+            for key, client in self._clients.items():
+                if key.startswith(prefix):
+                    return client
+        return None
+
+    def _get_or_connect_client(self, sdk, conversation: ConversationRef, workspace_path: str) -> Any:
+        key = self._client_key(conversation, workspace_path)
+        with self._clients_lock:
+            existing = self._clients.get(key)
+            if existing is not None:
+                return existing
+
+        opts_cls = getattr(sdk, "ClaudeAgentOptions", None)
+        client_cls = getattr(sdk, "ClaudeSDKClient", None)
+        if client_cls is None:
+            raise RuntimeError(
+                "claude_agent_sdk.ClaudeSDKClient not available; persistent "
+                "session mode requires a recent claude-agent-sdk."
+            )
+        options = opts_cls(cwd=workspace_path) if opts_cls else None
+
+        async def _connect():
+            client = client_cls(options=options) if options is not None else client_cls()
+            await client.connect()
+            return client
+
+        client = self._loop.run(_connect())
+
+        with self._clients_lock:
+            # Race: another turn may have just connected one; prefer the
+            # earliest by disconnecting our duplicate.
+            existing = self._clients.get(key)
+            if existing is not None:
+                # Throw away the one we just made.
+                async def _disc(c):
+                    try:
+                        await c.disconnect()
+                    except Exception:
+                        pass
+                try:
+                    self._loop.submit(_disc(client))
+                except Exception:
+                    pass
+                return existing
+            self._clients[key] = client
+            return client
 
     def begin_turn(
         self,
@@ -269,5 +360,20 @@ class ClaudeCodeAgentBackend(AgentBackend):
         )
 
     def kill(self) -> None:
-        # Claude-code has no persistent subprocess under our control; nothing to kill.
-        return None
+        # /kill or /clear: drop all live clients so the next turn starts a
+        # fresh CLI subprocess (and therefore a fresh conversation).
+        with self._clients_lock:
+            clients = list(self._clients.values())
+            self._clients.clear()
+
+        async def _disconnect_all():
+            for c in clients:
+                try:
+                    await c.disconnect()
+                except Exception:
+                    pass
+
+        try:
+            self._loop.run(_disconnect_all())
+        except Exception:
+            pass

@@ -18,20 +18,28 @@ def test_import_error_when_sdk_missing(monkeypatch):
         cc._import_sdk()
 
 
-def test_cancel_sets_state_cancelled():
+def _mk_turn(backend=None, existing_thread_id=None):
     from unittest.mock import MagicMock
-    from cws.agents.base import TurnState
 
-    turn = ClaudeCodeAgentTurn(
-        backend=MagicMock(),
+    return ClaudeCodeAgentTurn(
+        backend=backend or MagicMock(),
         conversation=MagicMock(),
         workspace_path="/tmp",
         prompt="hi",
-        existing_thread_id=None,
+        existing_thread_id=existing_thread_id,
         request_approval=MagicMock(),
         request_input=MagicMock(),
         publish_status=MagicMock(),
     )
+
+
+def test_cancel_sets_state_cancelled():
+    from cws.agents.base import TurnState
+    from unittest.mock import MagicMock
+
+    backend = MagicMock()
+    backend._peek_client.return_value = None
+    turn = _mk_turn(backend=backend)
     assert turn.state == TurnState.RUNNING
     turn.cancel()
     assert turn.state == TurnState.CANCELLED
@@ -39,39 +47,18 @@ def test_cancel_sets_state_cancelled():
 
 
 def test_exit_no_double_cancel():
-    from unittest.mock import MagicMock
     from cws.agents.base import TurnState
 
-    turn = ClaudeCodeAgentTurn(
-        backend=MagicMock(),
-        conversation=MagicMock(),
-        workspace_path="/tmp",
-        prompt="hi",
-        existing_thread_id=None,
-        request_approval=MagicMock(),
-        request_input=MagicMock(),
-        publish_status=MagicMock(),
-    )
+    turn = _mk_turn()
     turn.state = TurnState.COMPLETED
     turn.__exit__(None, None, None)  # Should NOT call cancel
     assert not turn._cancel_event.is_set()
 
 
 def test_handle_event_captures_session_id_from_attribute():
-    from unittest.mock import MagicMock
     from types import SimpleNamespace
 
-    turn = ClaudeCodeAgentTurn(
-        backend=MagicMock(),
-        conversation=MagicMock(),
-        workspace_path="/tmp",
-        prompt="hi",
-        existing_thread_id=None,
-        request_approval=MagicMock(),
-        request_input=MagicMock(),
-        publish_status=MagicMock(),
-    )
-    # AssistantMessage / ResultMessage style: session_id as attribute
+    turn = _mk_turn()
     event = SimpleNamespace(session_id="sess-abc", text="hello")
     turn._handle_event(event, [])
     assert turn._observed_session_id == "sess-abc"
@@ -83,97 +70,93 @@ def test_handle_event_captures_session_id_from_attribute():
 
 
 def test_handle_event_captures_session_id_from_system_message_data():
-    from unittest.mock import MagicMock
     from types import SimpleNamespace
 
-    turn = ClaudeCodeAgentTurn(
-        backend=MagicMock(),
-        conversation=MagicMock(),
-        workspace_path="/tmp",
-        prompt="hi",
-        existing_thread_id=None,
-        request_approval=MagicMock(),
-        request_input=MagicMock(),
-        publish_status=MagicMock(),
-    )
-    # SystemMessage("init", data={...}) style
+    turn = _mk_turn()
     event = SimpleNamespace(subtype="init", data={"session_id": "sess-init"})
     turn._handle_event(event, [])
     assert turn._observed_session_id == "sess-init"
 
 
-def test_iter_sdk_passes_resume_when_existing_thread_id_real(monkeypatch):
-    import asyncio
+def test_backend_caches_client_per_conversation_workspace():
+    """Backend must reuse the same ClaudeSDKClient across turns for the same
+    (conversation, workspace) pair so context persists. This is the core
+    behavior change vs. the old per-turn subprocess design."""
     from unittest.mock import MagicMock
+    from cws.agents.claude_code import ClaudeCodeAgentBackend
+    from cws.models import ConversationRef
 
-    captured: dict = {}
+    backend = ClaudeCodeAgentBackend(config=MagicMock())
+    try:
+        conv = ConversationRef("feishu", "default", "chat-1")
 
-    class FakeOptions:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
+        connect_calls = []
 
-    async def fake_query(prompt, options):
-        captured["prompt"] = prompt
-        captured["options"] = options
-        if False:
-            yield  # make it an async generator
+        class FakeClient:
+            def __init__(self, options=None):
+                self.id = id(self)
+                self.options = options
 
-    fake_sdk = MagicMock()
-    fake_sdk.query = fake_query
-    fake_sdk.ClaudeAgentOptions = FakeOptions
+            async def connect(self):
+                connect_calls.append(self.id)
 
-    turn = ClaudeCodeAgentTurn(
-        backend=MagicMock(),
-        conversation=MagicMock(),
-        workspace_path="/tmp/ws",
-        prompt="hello",
-        existing_thread_id="real-session-id-123",
-        request_approval=MagicMock(),
-        request_input=MagicMock(),
-        publish_status=MagicMock(),
-    )
+            async def disconnect(self):
+                pass
 
-    async def drive():
-        async for _ in turn._iter_sdk(fake_sdk):
-            pass
+        class FakeOptions:
+            def __init__(self, **kw):
+                self.kw = kw
 
-    asyncio.run(drive())
-    assert captured.get("resume") == "real-session-id-123"
-    assert str(captured.get("cwd")) == "/tmp/ws"
+        fake_sdk = MagicMock()
+        fake_sdk.ClaudeSDKClient = FakeClient
+        fake_sdk.ClaudeAgentOptions = FakeOptions
+
+        c1 = backend._get_or_connect_client(fake_sdk, conv, "/tmp/ws")
+        c2 = backend._get_or_connect_client(fake_sdk, conv, "/tmp/ws")
+        assert c1 is c2, "expected the same client instance to be reused"
+        assert len(connect_calls) == 1, "connect() should only fire once"
+
+        # Different workspace gets a different client.
+        c3 = backend._get_or_connect_client(fake_sdk, conv, "/tmp/other")
+        assert c3 is not c1
+        assert len(connect_calls) == 2
+    finally:
+        backend._loop.shutdown()
 
 
-def test_iter_sdk_skips_resume_for_placeholder_thread_id():
-    import asyncio
+def test_backend_kill_disconnects_clients():
     from unittest.mock import MagicMock
+    from cws.agents.claude_code import ClaudeCodeAgentBackend
+    from cws.models import ConversationRef
 
-    captured: dict = {}
+    backend = ClaudeCodeAgentBackend(config=MagicMock())
+    try:
+        disconnect_calls = []
 
-    class FakeOptions:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
+        class FakeClient:
+            def __init__(self, options=None):
+                self.options = options
 
-    async def fake_query(prompt, options):
-        if False:
-            yield
+            async def connect(self):
+                pass
 
-    fake_sdk = MagicMock()
-    fake_sdk.query = fake_query
-    fake_sdk.ClaudeAgentOptions = FakeOptions
+            async def disconnect(self):
+                disconnect_calls.append(1)
 
-    turn = ClaudeCodeAgentTurn(
-        backend=MagicMock(),
-        conversation=MagicMock(),
-        workspace_path="/tmp/ws",
-        prompt="hello",
-        existing_thread_id="cc-1234",  # placeholder, not a real SDK session id
-        request_approval=MagicMock(),
-        request_input=MagicMock(),
-        publish_status=MagicMock(),
-    )
+        class FakeOptions:
+            def __init__(self, **kw):
+                pass
 
-    async def drive():
-        async for _ in turn._iter_sdk(fake_sdk):
-            pass
+        fake_sdk = MagicMock()
+        fake_sdk.ClaudeSDKClient = FakeClient
+        fake_sdk.ClaudeAgentOptions = FakeOptions
 
-    asyncio.run(drive())
-    assert "resume" not in captured
+        backend._get_or_connect_client(fake_sdk, ConversationRef("feishu", "default", "a"), "/tmp/ws")
+        backend._get_or_connect_client(fake_sdk, ConversationRef("feishu", "default", "b"), "/tmp/ws")
+        assert len(backend._clients) == 2
+
+        backend.kill()
+        assert backend._clients == {}
+        assert len(disconnect_calls) == 2
+    finally:
+        backend._loop.shutdown()
