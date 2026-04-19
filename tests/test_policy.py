@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from vcws.models import ApprovalRequest, ConversationRef
-from vcws.policy import ApprovalPolicy
+from cws.models import ApprovalRequest, ConversationRef
+from cws.policy import ApprovalPolicy
 
 
 class ApprovalPolicyTests(unittest.TestCase):

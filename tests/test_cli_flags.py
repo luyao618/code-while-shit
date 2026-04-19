@@ -10,7 +10,7 @@ def _run(args, env=None):
     env_full = {**os.environ, **(env or {})}
     # Isolate runtime so tests don't collide
     return subprocess.run(
-        [sys.executable, "-m", "vcws", *args],
+        [sys.executable, "-m", "cws", *args],
         capture_output=True,
         text=True,
         env=env_full,

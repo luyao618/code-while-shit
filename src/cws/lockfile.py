@@ -92,7 +92,7 @@ def acquire(
     Behavior:
     - Fresh acquire on empty dir: writes PID atomically and returns Lock.
     - Existing lockfile with LIVE PID: always refuse (LockAcquireError with message including PID).
-    - Existing lockfile with STALE PID: refuse unless force=True or env VCWS_TAKEOVER_STALE=1.
+    - Existing lockfile with STALE PID: refuse unless force=True or env CWS_TAKEOVER_STALE=1.
       On takeover, emit WARN log with old PID + lockfile mtime.
     """
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -100,7 +100,7 @@ def acquire(
     my_pid = os.getpid()
     content = f"{my_pid}\n{agent_type}\n{workspace}"
 
-    env_force = os.environ.get("VCWS_TAKEOVER_STALE") == "1"
+    env_force = os.environ.get("CWS_TAKEOVER_STALE") == "1"
     take_stale = force or env_force
 
     # Try atomic create
@@ -113,7 +113,7 @@ def acquire(
             if not take_stale:
                 raise LockAcquireError(
                     f"serve.lock exists but is unreadable at {lock_path}. "
-                    f"Use --force or VCWS_TAKEOVER_STALE=1 to take over."
+                    f"Use --force or CWS_TAKEOVER_STALE=1 to take over."
                 )
             log.warning("Corrupt lockfile at %s — forcing takeover", lock_path)
             lock_path.unlink()
@@ -131,7 +131,7 @@ def acquire(
                 mtime = "unknown"
             raise LockAcquireError(
                 f"stale serve.lock found (pid={existing.pid}, mtime={mtime}). "
-                f"Pass --force or set VCWS_TAKEOVER_STALE=1 to take over."
+                f"Pass --force or set CWS_TAKEOVER_STALE=1 to take over."
             )
         try:
             mtime = time.ctime(lock_path.stat().st_mtime)

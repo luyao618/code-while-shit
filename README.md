@@ -38,20 +38,20 @@ Bridge 是 Agent-agnostic 的；codex 是三个后端之一。运行时状态默
 
 ```bash
 pip install -e .          # 或 uv pip install -e .
-vcws init                 # 生成 .env 与 workspace
+cws init                 # 生成 .env 与 workspace
 # 编辑 .env，填入 FEISHU_APP_ID / FEISHU_APP_SECRET
-vcws doctor               # 可选：自检 Feishu 凭证 + agent 依赖
-vcws serve                # 默认 claude-code，自动后台运行
-vcws status               # 查看运行状态（pid / agent / workspace）
-vcws stop                 # 优雅停止（SIGTERM → 5s 超时 → SIGKILL）
-vcws restart              # 等价于 stop + serve
+cws doctor               # 可选：自检 Feishu 凭证 + agent 依赖
+cws serve                # 默认 claude-code，自动后台运行
+cws status               # 查看运行状态（pid / agent / workspace）
+cws stop                 # 优雅停止（SIGTERM → 5s 超时 → SIGKILL）
+cws restart              # 等价于 stop + serve
 ```
 
-`vcws serve` 默认会 fork 到后台，shell 提示符立即返回；日志写到 `.omx/runtime/serve.log`（也就是 `$CWS_RUNTIME_DIR/serve.log`）。需要前台运行（例如调试或在 systemd / Docker 里跑）时加 `--foreground`。
+`cws serve` 默认会 fork 到后台，shell 提示符立即返回；日志写到 `.omx/runtime/serve.log`（也就是 `$CWS_RUNTIME_DIR/serve.log`）。需要前台运行（例如调试或在 systemd / Docker 里跑）时加 `--foreground`。
 
-需要其它 agent 时：`vcws serve --agent codex` 或 `vcws serve --agent opencode --allow-auto-approve`。
+需要其它 agent 时：`cws serve --agent codex` 或 `cws serve --agent opencode --allow-auto-approve`。
 
-`.env` 会被自动加载（显式 `export` 的环境变量优先级更高）。**请勿 commit `.env`** — 仓库默认把它加进了 `.gitignore`。老写法 `python3 -m vcws ...` 和显式 `export FEISHU_APP_ID=...` 依然可用。
+`.env` 会被自动加载（显式 `export` 的环境变量优先级更高）。**请勿 commit `.env`** — 仓库默认把它加进了 `.gitignore`。老写法 `python3 -m cws ...` 和显式 `export FEISHU_APP_ID=...` 依然可用。
 
 `doctor` 通过时会输出：
 
@@ -99,12 +99,12 @@ Feishu websocket mode active.
 
 | 命令 | 作用 |
 | --- | --- |
-| `vcws init [--workspace PATH] [--agent X]` | 生成模板 `.env` 并创建 workspace 目录（默认 agent = `claude-code`） |
-| `vcws doctor [--agent X]` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`lark-oapi` 及 Agent 依赖是否可用。不传 `--agent` 时遍历所有 agent，仅 Feishu 问题会失败 |
-| `vcws serve [--agent {codex,claude-code,opencode}] [--workspace PATH] [--allow-auto-approve] [--force] [--foreground]` | 启动飞书 WebSocket bridge；默认 fork 到后台并把日志写到 `.omx/runtime/serve.log`，加 `--foreground` 在前台运行；`--agent` 未传时取 `$VCWS_AGENT`，仍未设置则使用 `claude-code` |
-| `vcws status` | 显示当前 serve 进程（pid / agent / workspace / lockfile 路径） |
-| `vcws stop [--timeout S]` | 给 serve 进程发 SIGTERM，超时（默认 5s）后 SIGKILL，并清理 lockfile |
-| `vcws restart [serve 选项] [--timeout S]` | 先 stop 再 serve；同样支持 `--foreground` |
+| `cws init [--workspace PATH] [--agent X]` | 生成模板 `.env` 并创建 workspace 目录（默认 agent = `claude-code`） |
+| `cws doctor [--agent X]` | 检查 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`lark-oapi` 及 Agent 依赖是否可用。不传 `--agent` 时遍历所有 agent，仅 Feishu 问题会失败 |
+| `cws serve [--agent {codex,claude-code,opencode}] [--workspace PATH] [--allow-auto-approve] [--force] [--foreground]` | 启动飞书 WebSocket bridge；默认 fork 到后台并把日志写到 `.omx/runtime/serve.log`，加 `--foreground` 在前台运行；`--agent` 未传时取 `$CWS_AGENT`，仍未设置则使用 `claude-code` |
+| `cws status` | 显示当前 serve 进程（pid / agent / workspace / lockfile 路径） |
+| `cws stop [--timeout S]` | 给 serve 进程发 SIGTERM，超时（默认 5s）后 SIGKILL，并清理 lockfile |
+| `cws restart [serve 选项] [--timeout S]` | 先 stop 再 serve；同样支持 `--foreground` |
 
 ### 停止命令 / Stop commands
 
@@ -127,7 +127,7 @@ Feishu websocket mode active.
 一个飞书 bot 一次只能有一个 `serve` 进程，通过 `.omx/runtime/serve.lock` 强制。
 
 - 第二个 `serve` 启动会被拒绝，并打印现有进程的 PID。
-- Stale lockfile 需要 `--force` 或 `VCWS_TAKEOVER_STALE=1` 才能接管。
+- Stale lockfile 需要 `--force` 或 `CWS_TAKEOVER_STALE=1` 才能接管。
 
 ### 升级与回滚 / Upgrade & rollback
 
@@ -171,7 +171,7 @@ pip install code-while-shit==0.1.0
 
 ```bash
 python3 -m pip install -e .
-python3 -m vcws doctor
+python3 -m cws doctor
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
@@ -179,7 +179,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 - 目前只支持 **Feishu WebSocket** 入口，不支持 webhook 主路径
 - `serve` 启动前必须有 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
-- `serve` 的 `--agent` 可选；未传时回落到 `$VCWS_AGENT`，再回落到 `claude-code`
+- `serve` 的 `--agent` 可选；未传时回落到 `$CWS_AGENT`，再回落到 `claude-code`
 - 如果 `FEISHU_ALLOWED_USERS` 被设置，名单外用户会被拒绝
 - 如果 `/status` 里显示没有活跃 thread，说明这个会话还没真正开始过任务
 - 重启恢复会沿用同一会话的 Agent thread；它不是"回到中断 RPC 的精确现场"

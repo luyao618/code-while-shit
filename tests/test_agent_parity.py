@@ -15,12 +15,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from vcws.agents.base import AgentTurn, CancelNotSupported, TurnState
-from vcws.agents.claude_code import ClaudeCodeAgentBackend
-from vcws.agents.codex import CodexAgentBackend
-from vcws.agents.opencode import OpencodeAgentBackend
-from vcws.config import ClaudeCodeAgentConfig, CodexAgentConfig, OpencodeAgentConfig
-from vcws.models import ConversationRef
+from cws.agents.base import AgentTurn, CancelNotSupported, TurnState
+from cws.agents.claude_code import ClaudeCodeAgentBackend
+from cws.agents.codex import CodexAgentBackend
+from cws.agents.opencode import OpencodeAgentBackend
+from cws.config import ClaudeCodeAgentConfig, CodexAgentConfig, OpencodeAgentConfig
+from cws.models import ConversationRef
 
 
 def _conversation() -> ConversationRef:

@@ -1,7 +1,7 @@
 # Deep Interview Spec: vibe-coding-while-shit v0.2
 
 ## Metadata
-- Interview ID: vcws-v02-2026-04-17
+- Interview ID: cws-v02-2026-04-17
 - Rounds: 6
 - Final Ambiguity Score: 11.5%
 - Type: brownfield
@@ -36,7 +36,7 @@
 - 切换 agent 或 workspace = 停掉旧服务 + 用新参数启动新服务
 
 ### 接入分层
-- **codex** → 复用现有 JSON-RPC app-server 协议（`src/vcws/codex_app_server.py`），完整能力：审批、增量进度、turn/cancel
+- **codex** → 复用现有 JSON-RPC app-server 协议（`src/cws/codex_app_server.py`），完整能力：审批、增量进度、turn/cancel
 - **claude-code** → 使用官方 `claude-agent-sdk`（Python），完整能力
 - **opencode** → 优先使用 `opencode serve` HTTP 模式；能力降级（可能不支持结构化审批，退化为文本对话）
 - **逃生条款**：如果实现阶段证实 opencode 没有任何可用编程接入（HTTP/SDK 都不可行），允许降级为 stretch goal，在 0.2 release notes 明示
@@ -64,8 +64,8 @@
 ## Acceptance Criteria
 
 ### 启动与单例
-- [ ] `python -m vcws serve --agent codex --workspace .` 能正常启动，terminal 打印 `codex ready, waiting feishu messages...`（或等价提示）
-- [ ] `python -m vcws serve --agent claude-code --workspace ~/other` 能正常启动，其他 agent 的等价流程通过
+- [ ] `python -m cws serve --agent codex --workspace .` 能正常启动，terminal 打印 `codex ready, waiting feishu messages...`（或等价提示）
+- [ ] `python -m cws serve --agent claude-code --workspace ~/other` 能正常启动，其他 agent 的等价流程通过
 - [ ] `--agent` 支持 `codex | claude-code | opencode`；`--workspace` 接受绝对路径或 `.`，不存在时自动创建
 - [ ] 第二个 `serve` 启动时，检测到 lockfile 存在且 PID 活跃，立即报错退出并显示现有进程信息
 - [ ] 进程正常退出时清理 lockfile；进程被 kill 时下次启动能检测到 stale lockfile 并接管
@@ -109,19 +109,19 @@
 ## Technical Context
 
 ### 现有代码锚点
-- CLI 入口：`src/vcws/__main__.py` —— 需新增 argparse 的 `--agent` / `--workspace`
-- Agent 抽象：`src/vcws/codex_app_server.py:21` 已有 `CodexBackend` Protocol —— **这是多 agent 的天然落脚点**，建议重命名为 `AgentBackend` 并新增 `cancel_turn()` / `kill()` 方法
-- 配置：`src/vcws/config.py:18-26` 的 `CodexConfig` 需泛化为"按 agent 类型分派的配置"
-- 飞书消息路由：`src/vcws/service.py:62-91` 的 `handle_message` —— 需新增 `/cancel`、`/stop`、`/kill`、`/clear` 的命令分支
+- CLI 入口：`src/cws/__main__.py` —— 需新增 argparse 的 `--agent` / `--workspace`
+- Agent 抽象：`src/cws/codex_app_server.py:21` 已有 `CodexBackend` Protocol —— **这是多 agent 的天然落脚点**，建议重命名为 `AgentBackend` 并新增 `cancel_turn()` / `kill()` 方法
+- 配置：`src/cws/config.py:18-26` 的 `CodexConfig` 需泛化为"按 agent 类型分派的配置"
+- 飞书消息路由：`src/cws/service.py:62-91` 的 `handle_message` —— 需新增 `/cancel`、`/stop`、`/kill`、`/clear` 的命令分支
 - 运行时目录：`.omx/runtime/` —— 需新增 `serve.lock`
 
 ### 新建模块建议
-- `src/vcws/agents/base.py` —— `AgentBackend` Protocol + 通用 `cancel_turn()` / `kill()` 声明
-- `src/vcws/agents/codex.py` —— 从现 `codex_app_server.py` 抽出
-- `src/vcws/agents/claude_code.py` —— 新增（claude-agent-sdk 封装）
-- `src/vcws/agents/opencode.py` —— 新增（HTTP 封装，含能力降级逻辑）
-- `src/vcws/lockfile.py` —— 单例 PID lock
-- `src/vcws/terminal_sink.py` —— stdout 打印（前台进度流）
+- `src/cws/agents/base.py` —— `AgentBackend` Protocol + 通用 `cancel_turn()` / `kill()` 声明
+- `src/cws/agents/codex.py` —— 从现 `codex_app_server.py` 抽出
+- `src/cws/agents/claude_code.py` —— 新增（claude-agent-sdk 封装）
+- `src/cws/agents/opencode.py` —— 新增（HTTP 封装，含能力降级逻辑）
+- `src/cws/lockfile.py` —— 单例 PID lock
+- `src/cws/terminal_sink.py` —— stdout 打印（前台进度流）
 
 ### 外部依赖调研（实现阶段验证）
 - `claude-agent-sdk` Python 包的流式事件、取消 API、工具拦截

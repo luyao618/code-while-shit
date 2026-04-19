@@ -14,15 +14,15 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from vcws.config import AppConfig, CodexAgentConfig, FeishuConfig
-from vcws.models import (
+from cws.config import AppConfig, CodexAgentConfig, FeishuConfig
+from cws.models import (
     Actor,
     ConversationRef,
     InboundMessage,
     TurnOutcome,
 )
-from vcws.agents.base import TurnState
-from vcws.service import BridgeService
+from cws.agents.base import TurnState
+from cws.service import BridgeService
 
 
 # ---------------------------------------------------------------------------

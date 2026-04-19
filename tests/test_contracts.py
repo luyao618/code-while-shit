@@ -7,9 +7,9 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from vcws.__main__ import main
-from vcws.codex_app_server import CodexAppServerBackend
-from vcws.config import AppConfig, CodexConfig
+from cws.__main__ import main
+from cws.codex_app_server import CodexAppServerBackend
+from cws.config import AppConfig, CodexConfig
 
 
 class ContractTests(unittest.TestCase):

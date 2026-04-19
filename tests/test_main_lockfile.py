@@ -23,7 +23,7 @@ def test_serve_creates_lockfile_and_releases_on_sigint(tmp_path):
     # Start serve as subprocess (it will fail at feishu gateway since creds are fake,
     # but it should still acquire the lockfile first)
     proc = subprocess.Popen(
-        [sys.executable, "-m", "vcws", "serve", "--agent", "codex", "--workspace", str(workspace)],
+        [sys.executable, "-m", "cws", "serve", "--agent", "codex", "--workspace", str(workspace)],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -73,7 +73,7 @@ def test_serve_refuses_double_start(tmp_path):
         "FEISHU_APP_SECRET": "y",
     }
     result = subprocess.run(
-        [sys.executable, "-m", "vcws", "serve", "--agent", "codex", "--workspace", str(workspace)],
+        [sys.executable, "-m", "cws", "serve", "--agent", "codex", "--workspace", str(workspace)],
         env=env,
         capture_output=True,
         text=True,

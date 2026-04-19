@@ -24,13 +24,13 @@ from .terminal_sink import TerminalSink
 
 _AGENT_CHOICES = ["codex", "claude-code", "opencode"]
 
-_ENV_EXAMPLE = """# vcws configuration — copy to .env and fill in.
+_ENV_EXAMPLE = """# cws configuration — copy to .env and fill in.
 FEISHU_APP_ID=
 FEISHU_APP_SECRET=
 CWS_DEFAULT_WORKSPACE=.
 
 # Optional: default agent (codex | claude-code | opencode)
-# VCWS_AGENT=claude-code
+# CWS_AGENT=claude-code
 
 # Optional: comma-separated open_ids allowlist
 # FEISHU_ALLOWED_USERS=
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent",
         choices=_AGENT_CHOICES,
         default=None,
-        help="Agent backend (default: claude-code, or $VCWS_AGENT)",
+        help="Agent backend (default: claude-code, or $CWS_AGENT)",
     )
     serve_p.add_argument("--workspace", metavar="PATH", default=None, help="Workspace path")
     serve_p.add_argument(
@@ -100,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent",
         choices=_AGENT_CHOICES,
         default=None,
-        help="Agent backend (default: claude-code, or $VCWS_AGENT)",
+        help="Agent backend (default: claude-code, or $CWS_AGENT)",
     )
     restart_p.add_argument("--workspace", metavar="PATH", default=None, help="Workspace path")
     restart_p.add_argument(
@@ -169,7 +169,7 @@ def _run_status(runtime_dir: Path) -> int:
     print(f"- workspace: {info.workspace}")
     print(f"- lockfile: {runtime_dir / SERVE_LOCK_FILENAME}")
     if not alive:
-        print("hint: pid is dead. Run `vcws serve --force` to take over the stale lock.")
+        print("hint: pid is dead. Run `cws serve --force` to take over the stale lock.")
     return 0
 
 
@@ -249,8 +249,8 @@ def _run_init(workspace: str, agent: str) -> int:
         template = _ENV_EXAMPLE.replace("CWS_DEFAULT_WORKSPACE=.", f"CWS_DEFAULT_WORKSPACE={ws}")
         if agent != "codex":
             template = template.replace(
-                "# VCWS_AGENT=codex  # optional: codex | claude-code | opencode",
-                f"VCWS_AGENT={agent}",
+                "# CWS_AGENT=codex  # optional: codex | claude-code | opencode",
+                f"CWS_AGENT={agent}",
             )
         try:
             env_path.write_text(template, encoding="utf-8")
@@ -260,14 +260,14 @@ def _run_init(workspace: str, agent: str) -> int:
         print(f"- 已生成模板 .env：{env_path.resolve()}")
     print(f"- 工作目录已就绪：{ws}")
     print(f"- 默认 agent：{agent}")
-    print("下一步：编辑 .env 填入 FEISHU_APP_ID / FEISHU_APP_SECRET，然后 `vcws doctor`。")
+    print("下一步：编辑 .env 填入 FEISHU_APP_ID / FEISHU_APP_SECRET，然后 `cws doctor`。")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     # Auto-load .env (project, then user-global). Explicit env vars win.
     load_dotenv(Path(".env"))
-    load_dotenv(Path.home() / ".config" / "vcws" / ".env")
+    load_dotenv(Path.home() / ".config" / "cws" / ".env")
 
     args = build_parser().parse_args(argv)
 
@@ -347,7 +347,7 @@ def _daemonize(log_path: Path) -> None:
     pid = os.fork()
     if pid > 0:
         # Parent: print info and exit so the shell prompt returns.
-        print(f"- vcws serve detached to background (pid={pid})")
+        print(f"- cws serve detached to background (pid={pid})")
         print(f"- logs: {log_path}")
         os._exit(0)
     # Child

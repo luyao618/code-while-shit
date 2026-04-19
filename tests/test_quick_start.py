@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from vcws.config import load_dotenv
+from cws.config import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -60,7 +60,7 @@ def test_load_dotenv_ignores_comments_and_blanks(tmp_path, clean_env):
 def _run(args, cwd, env=None):
     env_full = {**os.environ, **(env or {})}
     return subprocess.run(
-        [sys.executable, "-m", "vcws", *args],
+        [sys.executable, "-m", "cws", *args],
         capture_output=True,
         text=True,
         env=env_full,
@@ -91,7 +91,7 @@ def test_init_records_non_default_agent(tmp_path):
     r = _run(["init", "--agent", "claude-code"], cwd=tmp_path)
     assert r.returncode == 0
     contents = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "VCWS_AGENT=claude-code" in contents
+    assert "CWS_AGENT=claude-code" in contents
 
 
 def test_doctor_without_agent_surveys_all_three(tmp_path):
