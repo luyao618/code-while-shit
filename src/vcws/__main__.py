@@ -141,7 +141,7 @@ def _check_agent_deps(agent: str) -> list[str]:
             import claude_agent_sdk  # noqa: F401
         except ImportError:
             problems.append(
-                "缺少 Python 依赖 claude-agent-sdk; 使用 pip install 'vibe-coding-while-shit[claude]' 安装"
+                "缺少 Python 依赖 claude-agent-sdk; 使用 pip install 'code-while-shit[claude]' 安装"
             )
     elif agent == "opencode":
         if shutil.which("opencode") is None:

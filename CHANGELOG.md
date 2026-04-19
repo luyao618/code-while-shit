@@ -44,7 +44,7 @@
 To downgrade from 0.2 → 0.1:
 
 ```bash
-pip install vibe-coding-while-shit==0.1.0
+pip install code-while-shit==0.1.0
 ```
 
 - 0.1 ignores the renamed `agent_thread_id` field; sessions effectively start fresh.

@@ -1,4 +1,4 @@
-# vibe-coding-while-shit — v0.2
+# code-while-shit — v0.2
 
 通过飞书 WebSocket 远程驱动本机 AI 编程助手（codex / claude-code / opencode）的轻量桥接服务。
 
@@ -133,13 +133,13 @@ Feishu websocket mode active.
 
 **升级：**
 ```bash
-pip install vibe-coding-while-shit==0.2.0
+pip install code-while-shit==0.2.0
 ```
 状态文件会自动迁移；`bridge-state.json.bak` 保留作为回退备份。
 
 **回滚：**
 ```bash
-pip install vibe-coding-while-shit==0.1.0
+pip install code-while-shit==0.1.0
 ```
 0.1 读不了新的 `agent_thread_id` 字段，会当作新 thread 开始；不影响正常运行。
 

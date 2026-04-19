@@ -20,7 +20,7 @@ class ClaudeCodeImportError(ImportError):
     def __init__(self):
         super().__init__(
             "claude-agent-sdk is not installed. "
-            "Install with: pip install 'vibe-coding-while-shit[claude]' "
+            "Install with: pip install 'code-while-shit[claude]' "
             "or: pip install claude-agent-sdk"
         )
 
