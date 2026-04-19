@@ -40,7 +40,6 @@ class ContractTests(unittest.TestCase):
             {
                 "FEISHU_APP_ID": "cli_xxx",
                 "FEISHU_APP_SECRET": "secret",
-                "CWS_DEFAULT_WORKSPACE": str(Path(tmp) / "workspace"),
                 "CWS_RUNTIME_DIR": str(Path(tmp) / "runtime"),
             },
             clear=True,
@@ -56,7 +55,6 @@ class ContractTests(unittest.TestCase):
             "os.environ",
             {
                 "FEISHU_APP_ID": "cli_xxx",
-                "CWS_DEFAULT_WORKSPACE": str(Path(tmp) / "workspace"),
                 "CWS_RUNTIME_DIR": str(Path(tmp) / "runtime"),
             },
             clear=True,

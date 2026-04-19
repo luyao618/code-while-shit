@@ -14,7 +14,7 @@ from cws.agents.base import TurnState, CancelNotSupported
 
 def _make_config(tmp_path):
     return AppConfig(
-        default_workspace=tmp_path,
+        workspace=tmp_path,
         runtime_dir=tmp_path / "rt",
         state_file=tmp_path / "rt" / "bridge-state.json",
         feishu=FeishuConfig(

@@ -16,19 +16,18 @@ def test_serve_creates_lockfile_and_releases_on_sigint(tmp_path):
     env = {
         **os.environ,
         "CWS_RUNTIME_DIR": str(runtime),
-        "CWS_DEFAULT_WORKSPACE": str(workspace),
         "FEISHU_APP_ID": "x",
         "FEISHU_APP_SECRET": "y",
     }
     # Start serve as subprocess (it will fail at feishu gateway since creds are fake,
     # but it should still acquire the lockfile first)
     proc = subprocess.Popen(
-        [sys.executable, "-m", "cws", "serve", "--agent", "codex", "--workspace", str(workspace)],
+        [sys.executable, "-m", "cws", "serve", "--agent", "codex", "--foreground"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        cwd=str(PROJECT_ROOT),
+        cwd=str(workspace),
     )
     # Give it up to 3s to get far enough to create the lockfile OR die
     for _ in range(30):
@@ -73,12 +72,12 @@ def test_serve_refuses_double_start(tmp_path):
         "FEISHU_APP_SECRET": "y",
     }
     result = subprocess.run(
-        [sys.executable, "-m", "cws", "serve", "--agent", "codex", "--workspace", str(workspace)],
+        [sys.executable, "-m", "cws", "serve", "--agent", "codex", "--foreground"],
         env=env,
         capture_output=True,
         text=True,
         timeout=10,
-        cwd=str(PROJECT_ROOT),
+        cwd=str(workspace),
     )
     assert result.returncode != 0
     combined = result.stdout + result.stderr

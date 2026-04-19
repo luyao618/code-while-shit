@@ -4,28 +4,31 @@ from cws.config import AppConfig, ConfigConflictError, CodexAgentConfig, ClaudeC
 
 
 def _args(**kw):
-    ns = argparse.Namespace(agent=None, workspace=None, allow_auto_approve=False, force=False)
+    ns = argparse.Namespace(agent=None, allow_auto_approve=False, force=False)
     for k, v in kw.items():
         setattr(ns, k, v)
     return ns
 
 
-def test_cli_beats_env_workspace(tmp_path):
-    ns = _args(agent="codex", workspace=str(tmp_path))
+def test_workspace_is_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _args(agent="codex")
     cfg = AppConfig.from_sources(ns, env={})
-    assert str(cfg.default_workspace) == str(tmp_path.resolve())
+    assert cfg.workspace == tmp_path.resolve()
 
 
-def test_conflict_workspace_raises(tmp_path):
-    ns = _args(agent="codex", workspace="/x")
-    with pytest.raises(ConfigConflictError, match="workspace"):
-        AppConfig.from_sources(ns, env={"CWS_DEFAULT_WORKSPACE": "/y"})
+def test_default_workspace_property(tmp_path, monkeypatch):
+    """Backward-compat: default_workspace == workspace."""
+    monkeypatch.chdir(tmp_path)
+    ns = _args(agent="codex")
+    cfg = AppConfig.from_sources(ns, env={})
+    assert cfg.default_workspace == cfg.workspace
 
 
-def test_agent_defaults_to_codex():
+def test_agent_defaults_to_claude_code():
     ns = _args()
     cfg = AppConfig.from_sources(ns, env={})
-    assert isinstance(cfg.agent, CodexAgentConfig)
+    assert isinstance(cfg.agent, ClaudeCodeAgentConfig)
 
 
 def test_env_only_agent_via_cws_agent():
@@ -51,3 +54,21 @@ def test_unknown_agent_raises():
     ns = _args(agent="bogus")
     with pytest.raises(ConfigConflictError, match="bogus"):
         AppConfig.from_sources(ns, env={})
+
+
+def test_runtime_dir_uses_workspace_hash(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CWS_RUNTIME_DIR", raising=False)
+    ns = _args(agent="codex")
+    cfg = AppConfig.from_sources(ns, env={})
+    # Should be under ~/.local/share/cws/runtime/<hash>
+    assert "cws" in str(cfg.runtime_dir)
+    assert "runtime" in str(cfg.runtime_dir)
+
+
+def test_runtime_dir_override_via_env(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rt = str(tmp_path / "myruntime")
+    ns = _args(agent="codex")
+    cfg = AppConfig.from_sources(ns, env={"CWS_RUNTIME_DIR": rt})
+    assert str(cfg.runtime_dir) == str(tmp_path / "myruntime")

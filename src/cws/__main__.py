@@ -24,18 +24,6 @@ from .terminal_sink import TerminalSink
 
 _AGENT_CHOICES = ["codex", "claude-code", "opencode"]
 
-_ENV_EXAMPLE = """# cws configuration — copy to .env and fill in.
-FEISHU_APP_ID=
-FEISHU_APP_SECRET=
-CWS_DEFAULT_WORKSPACE=.
-
-# Optional: default agent (codex | claude-code | opencode)
-# CWS_AGENT=claude-code
-
-# Optional: comma-separated open_ids allowlist
-# FEISHU_ALLOWED_USERS=
-"""
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Feishu-driven remote Codex bridge MVP")
@@ -46,9 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent",
         choices=_AGENT_CHOICES,
         default=None,
-        help="Agent backend (default: claude-code, or $CWS_AGENT)",
+        help="Agent backend (default: claude-code, or [agent] default in config.toml)",
     )
-    serve_p.add_argument("--workspace", metavar="PATH", default=None, help="Workspace path")
     serve_p.add_argument(
         "--allow-auto-approve",
         action="store_true",
@@ -59,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         default=False,
-        help="Force takeover of a stale lockfile (wired in US-009)",
+        help="Force takeover of a stale lockfile",
     )
     serve_p.add_argument(
         "--foreground",
@@ -76,14 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="When supplied, check only that agent's dependencies",
     )
 
-    init_p = sub.add_parser("init", help="Scaffold .env and workspace")
-    init_p.add_argument("--workspace", default=".", help="Workspace path to create")
-    init_p.add_argument(
-        "--agent",
-        choices=_AGENT_CHOICES,
-        default="claude-code",
-        help="Default agent recorded in .env comment",
-    )
+    sub.add_parser("init", help="Create global config template at ~/.config/cws/config.toml")
 
     stop_p = sub.add_parser("stop", help="Stop the running serve process")
     stop_p.add_argument(
@@ -100,9 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent",
         choices=_AGENT_CHOICES,
         default=None,
-        help="Agent backend (default: claude-code, or $CWS_AGENT)",
+        help="Agent backend (default: claude-code, or [agent] default in config.toml)",
     )
-    restart_p.add_argument("--workspace", metavar="PATH", default=None, help="Workspace path")
     restart_p.add_argument(
         "--allow-auto-approve",
         action="store_true",
@@ -127,6 +106,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Run in the foreground instead of detaching (default: detach to background)",
     )
+
+    # --- config subcommand ---
+    config_p = sub.add_parser("config", help="Manage global config (~/.config/cws/config.toml)")
+    config_sub = config_p.add_subparsers(dest="config_action", required=True)
+
+    config_sub.add_parser("path", help="Print path to global config file")
+    config_sub.add_parser("list", help="Print all config values (TOML format)")
+
+    config_get = config_sub.add_parser("get", help="Print a config value (key format: section.name)")
+    config_get.add_argument("key", help="Key in section.name format (e.g. feishu.app_id)")
+
+    config_set = config_sub.add_parser("set", help="Set a config value")
+    config_set.add_argument("key", help="Key in section.name format")
+    config_set.add_argument("value", help="Value to set")
+
+    config_unset = config_sub.add_parser("unset", help="Remove a config key")
+    config_unset.add_argument("key", help="Key in section.name format")
+
+    config_sub.add_parser("edit", help="Open config file in $EDITOR (fallback: vi)")
 
     return parser
 
@@ -214,13 +212,11 @@ def _run_stop(runtime_dir: Path, timeout: float) -> int:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        # Brief grace for OS cleanup
         for _ in range(20):
             if not pid_alive(pid):
                 break
             time.sleep(0.1)
 
-    # Clean lockfile if it still references the dead pid
     leftover = _read_lock_info(runtime_dir)
     if leftover is not None and leftover.pid == pid and lock_path.exists():
         try:
@@ -235,33 +231,75 @@ def _run_stop(runtime_dir: Path, timeout: float) -> int:
     return 0
 
 
-def _run_init(workspace: str, agent: str) -> int:
-    ws = Path(workspace).expanduser().resolve()
-    try:
-        ws.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        print(f"error: 无法创建工作目录 {ws}: {exc}", file=sys.stderr)
-        return 1
-    env_path = Path(".env")
-    if env_path.exists():
-        print(f"- .env 已存在，保留不覆盖：{env_path.resolve()}")
+def _run_init() -> int:
+    from . import user_config
+    config_path = user_config.get_path()
+    written = user_config.write_init_template()
+    if written:
+        print(f"Global config written: {config_path}")
     else:
-        template = _ENV_EXAMPLE.replace("CWS_DEFAULT_WORKSPACE=.", f"CWS_DEFAULT_WORKSPACE={ws}")
-        if agent != "codex":
-            template = template.replace(
-                "# CWS_AGENT=codex  # optional: codex | claude-code | opencode",
-                f"CWS_AGENT={agent}",
-            )
-        try:
-            env_path.write_text(template, encoding="utf-8")
-        except OSError as exc:
-            print(f"error: 无法写入 .env（当前目录不可写？）: {exc}", file=sys.stderr)
-            return 1
-        print(f"- 已生成模板 .env：{env_path.resolve()}")
-    print(f"- 工作目录已就绪：{ws}")
-    print(f"- 默认 agent：{agent}")
-    print("下一步：编辑 .env 填入 FEISHU_APP_ID / FEISHU_APP_SECRET，然后 `cws doctor`。")
+        print(f"Global config already exists: {config_path}")
+    print()
+    print("Next steps:")
+    print(f"  cws config set feishu.app_id YOUR_APP_ID")
+    print(f"  cws config set feishu.app_secret YOUR_APP_SECRET")
+    print(f"  cd /path/to/your/project && cws serve  # workspace = cwd")
     return 0
+
+
+def _run_config(args: argparse.Namespace) -> int:
+    from . import user_config
+    action = args.config_action
+
+    if action == "path":
+        print(user_config.get_path())
+        return 0
+
+    if action == "list":
+        data = user_config.load()
+        if not data:
+            print("(empty)")
+        else:
+            print(user_config.format_for_display(data), end="")
+        return 0
+
+    if action == "get":
+        val = user_config.get_value(args.key)
+        if val is None:
+            print(f"error: key {args.key!r} not found", file=sys.stderr)
+            return 1
+        print(val)
+        return 0
+
+    if action == "set":
+        try:
+            user_config.set_value(args.key, args.value)
+            print(f"set {args.key} = {args.value!r}")
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if action == "unset":
+        try:
+            user_config.unset_value(args.key)
+            print(f"unset {args.key}")
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if action == "edit":
+        editor = os.environ.get("EDITOR", "vi")
+        path = user_config.get_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            user_config.write_init_template()
+        os.execvp(editor, [editor, str(path)])
+        return 0  # unreachable
+
+    print(f"error: unknown config action: {action}", file=sys.stderr)
+    return 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,7 +310,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "init":
-        return _run_init(args.workspace, args.agent)
+        return _run_init()
+
+    if args.command == "config":
+        return _run_config(args)
 
     # --- config resolution ---
     try:
@@ -311,7 +352,6 @@ def main(argv: list[str] | None = None) -> int:
             if not agent_problems:
                 print(f"- {args.agent} 依赖可用")
         else:
-            # Survey all three; only Feishu problems count as fatal.
             for agent in _AGENT_CHOICES:
                 agent_problems = _check_agent_deps(agent)
                 if agent_problems:
@@ -335,24 +375,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _daemonize(log_path: Path) -> None:
-    """Detach the current process to background, redirecting stdout/stderr to log_path.
-
-    Uses a single fork (sufficient for our use): parent exits so the shell returns,
-    child becomes a session leader and writes to the log file. stdin is closed.
-    """
+    """Detach the current process to background, redirecting stdout/stderr to log_path."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    # Flush before fork so buffered banner doesn't double-print.
     sys.stdout.flush()
     sys.stderr.flush()
     pid = os.fork()
     if pid > 0:
-        # Parent: print info and exit so the shell prompt returns.
         print(f"- cws serve detached to background (pid={pid})")
         print(f"- logs: {log_path}")
         os._exit(0)
-    # Child
     os.setsid()
-    # Reopen stdio
     devnull_fd = os.open(os.devnull, os.O_RDONLY)
     os.dup2(devnull_fd, 0)
     os.close(devnull_fd)
@@ -369,13 +401,12 @@ def _run_serve(args: argparse.Namespace, config: AppConfig) -> int:
     if not foreground:
         log_path = config.runtime_dir / "serve.log"
         _daemonize(log_path)
-        # Now in detached child; continue startup.
 
     try:
         lock = lockfile_acquire(
             config.runtime_dir,
             agent_type=agent_type,
-            workspace=str(config.default_workspace),
+            workspace=str(config.workspace),
             force=args.force,
         )
     except LockAcquireError as exc:
@@ -405,7 +436,7 @@ def _run_serve(args: argparse.Namespace, config: AppConfig) -> int:
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
-    sink.banner(f"{agent_type} ready, waiting feishu messages... (workspace={config.default_workspace})")
+    sink.banner(f"{agent_type} ready, waiting feishu messages... (workspace={config.workspace})")
     gateway.serve_forever()
     return 0
 
