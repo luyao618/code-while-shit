@@ -67,23 +67,45 @@ def _format_value(v: Any) -> str:
     return f'"{v}"'
 
 
-def format_for_display(data: dict) -> str:
+_SECRET_KEYWORDS = ("secret", "token", "password", "api_key", "apikey")
+
+
+def _is_secret_key(name: str) -> bool:
+    n = name.lower()
+    return any(kw in n for kw in _SECRET_KEYWORDS)
+
+
+def _mask_secret(v: Any) -> str:
+    """Mask a secret value, showing first/last 4 chars when long enough."""
+    if not isinstance(v, str) or not v:
+        return '""'
+    if len(v) <= 8:
+        return '"****"'
+    return f'"{v[:4]}...{v[-4:]}"'
+
+
+def format_for_display(data: dict, *, mask_secrets: bool = True) -> str:
     lines: list[str] = []
     for section, values in data.items():
         if isinstance(values, dict):
             lines.append(f"[{section}]")
             for k, v in values.items():
-                lines.append(f"{k} = {_format_value(v)}")
+                rendered = _mask_secret(v) if mask_secrets and _is_secret_key(k) else _format_value(v)
+                lines.append(f"{k} = {rendered}")
             lines.append("")
         else:
-            lines.append(f"{section} = {_format_value(values)}")
+            rendered = (
+                _mask_secret(values) if mask_secrets and _is_secret_key(section) else _format_value(values)
+            )
+            lines.append(f"{section} = {rendered}")
     return "\n".join(lines).rstrip() + "\n"
 
 
 def save(data: dict) -> None:
     path = get_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(format_for_display(data), encoding="utf-8")
+    # Disk file must be unmasked.
+    path.write_text(format_for_display(data, mask_secrets=False), encoding="utf-8")
 
 
 def set_value(key: str, value: str) -> None:

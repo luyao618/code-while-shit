@@ -231,6 +231,38 @@ def _run_stop(runtime_dir: Path, timeout: float) -> int:
     return 0
 
 
+def _run_doctor(args: argparse.Namespace, config: AppConfig) -> int:
+    problems: list[str] = []
+    if not config.feishu.app_id:
+        problems.append("缺少 FEISHU_APP_ID")
+    if not config.feishu.app_secret:
+        problems.append("缺少 FEISHU_APP_SECRET")
+    if not lark_sdk_available():
+        problems.append("缺少 Python 依赖 lark-oapi（Feishu websocket transport 必需）")
+
+    target_agent = getattr(args, "agent", None)
+    if target_agent:
+        agent_problems = _check_agent_deps(target_agent)
+        problems.extend(agent_problems)
+        if not agent_problems:
+            print(f"- {target_agent} 依赖可用")
+    else:
+        for agent in _AGENT_CHOICES:
+            agent_problems = _check_agent_deps(agent)
+            if agent_problems:
+                for p in agent_problems:
+                    print(f"- ⚠️  {agent}: {p}")
+            else:
+                print(f"- ✓ {agent} 依赖可用")
+
+    if problems:
+        for problem in problems:
+            print(f"- {problem}")
+        return 1
+    print("配置看起来可启动（Feishu WebSocket mode）。")
+    return 0
+
+
 def _run_init() -> int:
     from . import user_config
     config_path = user_config.get_path()
@@ -244,6 +276,16 @@ def _run_init() -> int:
     print(f"  cws config set feishu.app_id YOUR_APP_ID")
     print(f"  cws config set feishu.app_secret YOUR_APP_SECRET")
     print(f"  cd /path/to/your/project && cws serve  # workspace = cwd")
+    print()
+    print("--- Running cws doctor ---")
+    try:
+        ns = argparse.Namespace(command="doctor", agent=None)
+        config = AppConfig.from_sources(ns)
+    except ConfigConflictError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 0  # init itself succeeded
+    _run_doctor(ns, config)
+    # init always returns 0 — doctor is informational only
     return 0
 
 
@@ -338,34 +380,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- doctor ---
     if args.command == "doctor":
-        problems: list[str] = []
-        if not config.feishu.app_id:
-            problems.append("缺少 FEISHU_APP_ID")
-        if not config.feishu.app_secret:
-            problems.append("缺少 FEISHU_APP_SECRET")
-        if not lark_sdk_available():
-            problems.append("缺少 Python 依赖 lark-oapi（Feishu websocket transport 必需）")
-
-        if args.agent:
-            agent_problems = _check_agent_deps(args.agent)
-            problems.extend(agent_problems)
-            if not agent_problems:
-                print(f"- {args.agent} 依赖可用")
-        else:
-            for agent in _AGENT_CHOICES:
-                agent_problems = _check_agent_deps(agent)
-                if agent_problems:
-                    for p in agent_problems:
-                        print(f"- ⚠️  {agent}: {p}")
-                else:
-                    print(f"- ✓ {agent} 依赖可用")
-
-        if problems:
-            for problem in problems:
-                print(f"- {problem}")
-            return 1
-        print("配置看起来可启动（Feishu WebSocket mode）。")
-        return 0
+        return _run_doctor(args, config)
 
     if args.command == "serve":
         return _run_serve(args, config)
@@ -374,9 +389,52 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+_LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+_LOG_ROTATE_KEEP = 3
+
+
+def _rotate_log_if_needed(log_path: Path) -> None:
+    """Rotate log_path on startup if it exceeds size threshold.
+
+    Keeps up to _LOG_ROTATE_KEEP backups (.1, .2, .3). Old .3 is dropped.
+    Done once on serve start; no in-process rotation (raw fd is used).
+    """
+    try:
+        size = log_path.stat().st_size
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+    if size < _LOG_ROTATE_MAX_BYTES:
+        return
+    # Shift backups: .2 -> .3, .1 -> .2, current -> .1
+    for i in range(_LOG_ROTATE_KEEP, 0, -1):
+        src = log_path.with_suffix(log_path.suffix + f".{i}")
+        if i == _LOG_ROTATE_KEEP:
+            try:
+                src.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+            continue
+        dst = log_path.with_suffix(log_path.suffix + f".{i + 1}")
+        try:
+            src.rename(dst)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    try:
+        log_path.rename(log_path.with_suffix(log_path.suffix + ".1"))
+    except OSError:
+        pass
+
+
 def _daemonize(log_path: Path) -> None:
     """Detach the current process to background, redirecting stdout/stderr to log_path."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_log_if_needed(log_path)
     sys.stdout.flush()
     sys.stderr.flush()
     pid = os.fork()
