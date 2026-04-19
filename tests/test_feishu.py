@@ -101,7 +101,7 @@ class FeishuWebSocketParsingTests(unittest.TestCase):
         self.assertEqual(_extract_text("raw message"), "raw message")
 
     def test_build_progress_card_uses_raw_elements_shape(self) -> None:
-        card = _build_progress_card(ProgressUpdate("running", "处理中：Codex 正在执行任务。"))
+        card = _build_progress_card(ProgressUpdate("running", "处理中：Agent 正在执行任务。"))
         self.assertNotIn("schema", card)
         self.assertNotIn("body", card)
         self.assertEqual(card["config"], {"wide_screen_mode": True})

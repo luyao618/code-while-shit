@@ -65,14 +65,14 @@ def milestone_text(milestone: str, text: str | None = None) -> str:
         return text.strip()
     defaults = {
         "accepted": "已收到：消息已进入处理队列。",
-        "thinking": "正在思考：Codex 正在分析你的请求。",
-        "running": "正在处理：Codex 正在执行任务。",
-        "waiting_input": "等待补充信息：Codex 需要你的进一步说明。",
-        "waiting_approval": "等待确认：Codex 需要你的确认。",
-        "completed": "已完成：Codex 已结束当前执行。",
-        "failed": "失败：Codex 执行未完成。",
+        "thinking": "正在思考：Agent 正在分析你的请求。",
+        "running": "正在处理：Agent 正在执行任务。",
+        "waiting_input": "等待补充信息：Agent 需要你的进一步说明。",
+        "waiting_approval": "等待确认：Agent 需要你的确认。",
+        "completed": "已完成：Agent 已结束当前执行。",
+        "failed": "失败：Agent 执行未完成。",
     }
-    return defaults.get(milestone, "正在处理：Codex 正在执行任务。")
+    return defaults.get(milestone, "正在处理：Agent 正在执行任务。")
 
 
 def normalize_progress_update(update: object) -> tuple[str, str]:
@@ -104,10 +104,10 @@ def normalize_progress_update(update: object) -> tuple[str, str]:
 
 def final_progress_text(status: str, detail: str | None = None) -> str:
     if status == "completed":
-        return "已完成：Codex 已结束当前执行。"
+        return "已完成：Agent 已结束当前执行。"
     if status == "interrupted":
-        return "已停止：Codex 中断了当前执行。"
-    return detail.strip() if detail and detail.strip() else "失败：Codex 执行未完成。"
+        return "已停止：Agent 中断了当前执行。"
+    return detail.strip() if detail and detail.strip() else "失败：Agent 执行未完成。"
 
 
 class ProgressSurfaceManager:

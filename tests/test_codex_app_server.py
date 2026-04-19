@@ -87,8 +87,8 @@ class CodexBackendTests(unittest.TestCase):
         self.assertEqual(outcome.status, "completed")
         self.assertEqual(backend._client.last_approval_response["decision"], "deny")
         observed_statuses = list(statuses.queue)
-        self.assertIn("处理中：Codex 正在执行任务。", observed_statuses)
-        self.assertIn("等待确认：Codex 需要你的确认。", observed_statuses)
+        self.assertIn("处理中：Agent 正在执行任务。", observed_statuses)
+        self.assertIn("等待确认：Agent 需要你的确认。", observed_statuses)
 
     @unittest.skipUnless(
         HAS_PROGRESS_UPDATES,

@@ -5,6 +5,7 @@ import atexit
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -74,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("status", help="Show running serve info from lockfile")
+
+    sub.add_parser(
+        "update",
+        help="Re-install cws from upstream main via `uv tool install --force`",
+    )
 
     restart_p = sub.add_parser("restart", help="Stop the running serve, then start a new one")
     restart_p.add_argument(
@@ -263,6 +269,27 @@ def _run_doctor(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+_REPO_GIT_URL = "git+https://github.com/luyao618/code-while-shit.git"
+
+
+def _run_update() -> int:
+    """Re-install cws from upstream main via `uv tool install --force`."""
+    if shutil.which("uv") is None:
+        print(
+            "error: `uv` not found on PATH. Re-run the installer:\n"
+            "  curl -fsSL https://raw.githubusercontent.com/luyao618/code-while-shit/main/scripts/install.sh | sh",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"→ Re-installing cws from {_REPO_GIT_URL} (latest main)...")
+    rc = subprocess.call(["uv", "tool", "install", "--force", _REPO_GIT_URL])
+    if rc != 0:
+        print("error: uv tool install failed", file=sys.stderr)
+        return rc
+    print("✅ cws updated. The new version is active in any new shell.")
+    return 0
+
+
 def _run_init() -> int:
     from . import user_config
     config_path = user_config.get_path()
@@ -275,17 +302,8 @@ def _run_init() -> int:
     print("Next steps:")
     print(f"  cws config set feishu.app_id YOUR_APP_ID")
     print(f"  cws config set feishu.app_secret YOUR_APP_SECRET")
-    print(f"  cd /path/to/your/project && cws serve  # workspace = cwd")
-    print()
-    print("--- Running cws doctor ---")
-    try:
-        ns = argparse.Namespace(command="doctor", agent=None)
-        config = AppConfig.from_sources(ns)
-    except ConfigConflictError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 0  # init itself succeeded
-    _run_doctor(ns, config)
-    # init always returns 0 — doctor is informational only
+    print(f"  cws doctor                                     # verify everything is wired up")
+    print(f"  cd /path/to/your/project && cws serve          # workspace = cwd")
     return 0
 
 
@@ -356,6 +374,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "config":
         return _run_config(args)
+
+    if args.command == "update":
+        return _run_update()
 
     # --- config resolution ---
     try:

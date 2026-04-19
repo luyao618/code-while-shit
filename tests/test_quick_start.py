@@ -90,6 +90,25 @@ def test_init_does_not_overwrite_existing_config(tmp_path, monkeypatch):
     assert "existing" in config_path.read_text(encoding="utf-8")
 
 
+def test_init_does_not_auto_run_doctor(tmp_path, monkeypatch):
+    """`cws init` must NOT invoke `cws doctor` — see fix/init-no-doctor.
+
+    Auto-running doctor caused output interleaving with the user's next
+    typed command (claude-agent-sdk import is slow). init should only
+    print a hint to run doctor manually.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    r = _run(["init"], cwd=tmp_path)
+    assert r.returncode == 0
+    out = r.stdout + r.stderr
+    # Doctor's signature output must NOT appear
+    assert "Running cws doctor" not in out
+    assert "依赖可用" not in out  # doctor's per-agent dep check output
+    assert "可启动" not in out      # doctor's success line
+    # But the suggestion to run it manually should be there
+    assert "cws doctor" in out
+
+
 def test_doctor_without_agent_surveys_all_three(tmp_path):
     r = _run(
         ["doctor"],

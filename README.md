@@ -97,8 +97,9 @@ uv run pytest
 ## 升级与回滚
 
 ```bash
-pip install code-while-shit==0.2.0   # 升级；状态文件自动迁移，留 .bak
-pip install code-while-shit==0.1.0   # 回滚；0.1 忽略新字段，不影响运行
+cws update                                    # 升级到 main 最新版（推荐）
+# 等价于：uv tool install --force git+https://github.com/luyao618/code-while-shit.git
+uv tool uninstall code-while-shit             # 完全卸载
 ```
 
 ---
@@ -202,6 +203,7 @@ uv run pytest
 ## Upgrade & rollback
 
 ```bash
-pip install code-while-shit==0.2.0   # upgrade; state auto-migrates, .bak kept
-pip install code-while-shit==0.1.0   # rollback; 0.1 ignores new fields safely
+cws update                                    # upgrade to latest main (recommended)
+# equivalent to: uv tool install --force git+https://github.com/luyao618/code-while-shit.git
+uv tool uninstall code-while-shit             # uninstall completely
 ```

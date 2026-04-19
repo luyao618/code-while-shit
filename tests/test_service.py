@@ -54,7 +54,7 @@ class FakeBackend:
 
     def process_turn(self, conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status):
         self.turns.append((conversation, workspace_path, prompt, existing_thread_id))
-        publish_status("处理中：Codex 正在执行任务。")
+        publish_status("处理中：Agent 正在执行任务。")
         answer = request_input(
             InputRequest(
                 "input-1",
@@ -306,7 +306,7 @@ class AdditionalBridgeServiceTests(unittest.TestCase):
         class RecoveryBackend(FakeBackend):
             def process_turn(self, conversation, workspace_path, prompt, existing_thread_id, request_approval, request_input, publish_status):
                 self.turns.append((prompt, existing_thread_id))
-                publish_status("处理中：Codex 正在执行任务。")
+                publish_status("处理中：Agent 正在执行任务。")
                 return TurnOutcome(thread_id=existing_thread_id or "thread-1", summary="ok", status="completed")
 
         with tempfile.TemporaryDirectory() as tmp:

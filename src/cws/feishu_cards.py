@@ -63,7 +63,7 @@ def _build_approval_card(
         deny_value = _approval_action_value(prompt, conversation=conversation, decision="deny")
         elements.extend(
             [
-                {"tag": "markdown", "content": "_确认后会继续当前 Codex 执行；拒绝会终止本次敏感操作。_"},
+                {"tag": "markdown", "content": "_确认后会继续当前 Agent 执行；拒绝会终止本次敏感操作。_"},
                 {
                     "tag": "action",
                     "actions": [
