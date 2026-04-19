@@ -284,7 +284,7 @@ class BridgeService:
             kind="user_input",
             session_key=session.key,
             conversation=request.conversation,
-            title="Codex 需要补充信息",
+            title="Agent 需要补充信息",
             prompt=request.prompt_text(),
             created_at=datetime.now(UTC).isoformat(),
             codex_thread_id=request.codex_thread_id,
@@ -361,7 +361,7 @@ class BridgeService:
         if request.grant_root:
             parts.append(f"路径：`{request.grant_root}`")
         if request.reason:
-            parts.append(f"Codex 描述：{request.reason}")
+            parts.append(f"Agent 描述：{request.reason}")
         parts.append("确认后将继续执行；拒绝则本轮任务停止。")
         return "\n".join(parts)
 
@@ -442,13 +442,13 @@ class BridgeService:
         if transport.last_error:
             status.append(f"Transport Error：{transport.last_error}")
         if session is None:
-            status.append("当前会话还没有活跃的 Codex 线程。")
+            status.append("当前会话还没有活跃的 Agent 线程。")
             self.adapter.send_result(conversation, "\n".join(status))
             return
         binding = self.state.get_binding(conversation, session.active_workspace)
         status.extend([f"状态：{session.state}", f"工作目录：{session.active_workspace}"])
         if binding and binding.agent_thread_id:
-            status.append(f"Codex Thread：{binding.agent_thread_id}")
+            status.append(f"Agent Thread：{binding.agent_thread_id}")
         if getattr(session, "progress_milestone", None):
             status.append(f"进度阶段：{getattr(session, 'progress_milestone')}")
         if getattr(session, "progress_message_id", None):

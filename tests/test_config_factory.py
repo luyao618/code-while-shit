@@ -56,14 +56,24 @@ def test_unknown_agent_raises():
         AppConfig.from_sources(ns, env={})
 
 
-def test_runtime_dir_uses_workspace_hash(tmp_path, monkeypatch):
+def test_runtime_dir_is_global(tmp_path, monkeypatch):
+    """Runtime dir is a single global location regardless of cwd (singleton serve)."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CWS_RUNTIME_DIR", raising=False)
     ns = _args(agent="codex")
-    cfg = AppConfig.from_sources(ns, env={})
-    # Should be under ~/.local/share/cws/runtime/<hash>
-    assert "cws" in str(cfg.runtime_dir)
-    assert "runtime" in str(cfg.runtime_dir)
+    cfg_a = AppConfig.from_sources(ns, env={})
+
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    cfg_b = AppConfig.from_sources(ns, env={})
+
+    # Same runtime dir regardless of cwd
+    assert cfg_a.runtime_dir == cfg_b.runtime_dir
+    assert "cws" in str(cfg_a.runtime_dir)
+    assert "runtime" in str(cfg_a.runtime_dir)
+    # No workspace-hashed sub-path
+    assert str(cfg_a.runtime_dir).endswith("/cws/runtime")
 
 
 def test_runtime_dir_override_via_env(tmp_path, monkeypatch):

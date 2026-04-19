@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `cws update` — re-installs cws from upstream `main` via `uv tool install --force`. One-liner upgrade for users.
+
+### Changed
+- **Runtime dir is now global** at `~/.local/share/cws/runtime/` (no more per-workspace `<sha256(cwd)>` sub-directory). Since a single Feishu app cannot have two concurrent WebSocket connections, `cws serve` is a singleton — having per-workspace runtime dirs only made `cws status` confusing across directories. Override via `CWS_RUNTIME_DIR` is unchanged.
+- `cws init` no longer auto-invokes `cws doctor`. It now prints `cws doctor` as a suggested next step instead. (The auto-run caused stdout to interleave with the user's next typed command because the `claude-code` dep check imports the SDK, which is slow.)
+
+### Fixed
+- Progress card and milestone messages no longer hard-code "Codex". When running with the `claude-code` or `opencode` agent, the card now correctly shows "Agent 已结束当前执行" instead of misleadingly saying "Codex 已结束当前执行".
+
+### Migration
+- Users on the previous version may have leftover `~/.local/share/cws/runtime/<12-hex>/` directories. They are not used anymore — safe to delete with `rm -rf ~/.local/share/cws/runtime/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]`. Existing thread bindings stored under those dirs will not migrate automatically; the next `cws serve` starts a fresh `bridge-state.json` at the new global path.
+
 ## 0.2.0 (2026-04-17)
 
 ### ⚠️ BREAKING CHANGES

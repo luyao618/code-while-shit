@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -94,14 +93,16 @@ class OpencodeAgentConfig(AgentConfig):
 CodexConfig = CodexAgentConfig
 
 
-def _workspace_hash(workspace: Path) -> str:
-    return hashlib.sha256(str(workspace).encode()).hexdigest()[:12]
+def _default_runtime_dir() -> Path:
+    """Single global runtime dir under XDG_DATA_HOME (default: ~/.local/share/cws/runtime).
 
-
-def _default_runtime_dir(workspace: Path) -> Path:
+    A single Feishu app cannot have two concurrent WebSocket connections, so
+    `cws serve` is a singleton. The lockfile, state, and serve.log all live
+    here regardless of which workspace cws was invoked in.
+    """
     xdg = os.environ.get("XDG_DATA_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "share"
-    return base / "cws" / "runtime" / _workspace_hash(workspace)
+    return base / "cws" / "runtime"
 
 
 def _load_global_config_as_env() -> dict[str, str]:
@@ -199,7 +200,7 @@ class AppConfig:
         if runtime_dir_env:
             runtime_dir = Path(runtime_dir_env).resolve()
         else:
-            runtime_dir = _default_runtime_dir(workspace)
+            runtime_dir = _default_runtime_dir()
 
         state_file = runtime_dir / "bridge-state.json"
 
