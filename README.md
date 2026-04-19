@@ -94,12 +94,16 @@ uv pip install -e .
 uv run pytest
 ```
 
-## 升级与回滚
+## 升级与卸载
 
 ```bash
-cws update                                    # 升级到 main 最新版（推荐）
-# 等价于：uv tool install --force git+https://github.com/luyao618/code-while-shit.git
-uv tool uninstall code-while-shit             # 完全卸载
+# 升级（推荐）：重跑安装脚本即可
+curl -fsSL https://raw.githubusercontent.com/luyao618/code-while-shit/main/scripts/install.sh | sh
+# 或在已装好的环境里：
+cws update
+
+# 卸载
+uv tool uninstall code-while-shit
 ```
 
 ---
@@ -200,10 +204,14 @@ uv pip install -e .
 uv run pytest
 ```
 
-## Upgrade & rollback
+## Upgrade & uninstall
 
 ```bash
-cws update                                    # upgrade to latest main (recommended)
-# equivalent to: uv tool install --force git+https://github.com/luyao618/code-while-shit.git
-uv tool uninstall code-while-shit             # uninstall completely
+# Upgrade (recommended): just re-run the installer
+curl -fsSL https://raw.githubusercontent.com/luyao618/code-while-shit/main/scripts/install.sh | sh
+# Or, from an existing install:
+cws update
+
+# Uninstall
+uv tool uninstall code-while-shit
 ```
