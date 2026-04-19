@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vibe-coding-while-shit"
+name = "code-while-shit"
 version = "0.2.0"
 description = "Feishu-driven remote agent bridge (codex / claude-code / opencode) MVP"
 readme = "README.md"
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Kept for backward compatibility with `pip install 'vibe-coding-while-shit[claude]'`.
+# Kept for backward compatibility with `pip install 'code-while-shit[claude]'`.
 # claude-agent-sdk is now a base dependency, so this extra is a no-op.
 claude = []
 
