@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,13 +94,67 @@ class OpencodeAgentConfig(AgentConfig):
 CodexConfig = CodexAgentConfig
 
 
+def _workspace_hash(workspace: Path) -> str:
+    return hashlib.sha256(str(workspace).encode()).hexdigest()[:12]
+
+
+def _default_runtime_dir(workspace: Path) -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "cws" / "runtime" / _workspace_hash(workspace)
+
+
+def _load_global_config_as_env() -> dict[str, str]:
+    """Load global TOML config and flatten to env-like dict as fallback."""
+    from . import user_config  # local import to avoid circular
+    data = user_config.load()
+    fallback: dict[str, str] = {}
+
+    feishu = data.get("feishu", {})
+    if feishu.get("app_id"):
+        fallback["FEISHU_APP_ID"] = str(feishu["app_id"])
+    if feishu.get("app_secret"):
+        fallback["FEISHU_APP_SECRET"] = str(feishu["app_secret"])
+    if feishu.get("domain"):
+        fallback["FEISHU_DOMAIN"] = str(feishu["domain"])
+    if feishu.get("allowed_users"):
+        users = feishu["allowed_users"]
+        if isinstance(users, list):
+            fallback["FEISHU_ALLOWED_USERS"] = ",".join(str(u) for u in users)
+        else:
+            fallback["FEISHU_ALLOWED_USERS"] = str(users)
+
+    agent = data.get("agent", {})
+    if agent.get("default"):
+        fallback["CWS_AGENT"] = str(agent["default"])
+
+    codex = data.get("codex", {})
+    if codex.get("model"):
+        fallback["CODEX_MODEL"] = str(codex["model"])
+    if codex.get("approval_policy"):
+        fallback["CODEX_APPROVAL_POLICY"] = str(codex["approval_policy"])
+    if codex.get("command"):
+        fallback["CODEX_COMMAND"] = str(codex["command"])
+    if codex.get("sandbox"):
+        fallback["CODEX_SANDBOX"] = str(codex["sandbox"])
+    if codex.get("service_tier"):
+        fallback["CODEX_SERVICE_TIER"] = str(codex["service_tier"])
+
+    return fallback
+
+
 @dataclass(frozen=True)
 class AppConfig:
-    default_workspace: Path
+    workspace: Path
     runtime_dir: Path
     state_file: Path
     feishu: FeishuConfig
     agent: AgentConfig
+
+    # Backward compat: old code accesses default_workspace
+    @property
+    def default_workspace(self) -> Path:
+        return self.workspace
 
     # Backward compat — old .codex attribute access
     @property
@@ -110,7 +165,7 @@ class AppConfig:
 
     def ensure_runtime_dirs(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        self.default_workspace.mkdir(parents=True, exist_ok=True)
+        self.workspace.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def from_sources(
@@ -121,39 +176,42 @@ class AppConfig:
         if env is None:
             env = dict(os.environ)
 
+        # Load global TOML config as fallback (lowest precedence above built-in defaults)
+        toml_fallback = _load_global_config_as_env()
+
+        def _get(key: str, default: str = "") -> str:
+            return env.get(key) or toml_fallback.get(key) or default
+
+        # --- workspace = cwd at call time ---
+        workspace = Path.cwd().resolve()
+
         # --- agent_type ---
         cli_agent = getattr(args, "agent", None) or None
-        env_agent = env.get("CWS_AGENT") or None
+        env_agent = _get("CWS_AGENT") or None
         if cli_agent and env_agent and cli_agent != env_agent:
             raise ConfigConflictError(
                 f"agent conflict: CLI={cli_agent!r} vs env CWS_AGENT={env_agent!r}"
             )
-        agent_type = cli_agent or env_agent
-        if not agent_type:
-            agent_type = DEFAULT_AGENT
+        agent_type = cli_agent or env_agent or DEFAULT_AGENT
 
-        # --- workspace ---
-        cli_workspace = getattr(args, "workspace", None) or None
-        env_workspace = env.get("CWS_DEFAULT_WORKSPACE") or None
-        if cli_workspace and env_workspace and cli_workspace != env_workspace:
-            raise ConfigConflictError(
-                f"workspace conflict: CLI={cli_workspace!r} vs env CWS_DEFAULT_WORKSPACE={env_workspace!r}"
-            )
-        workspace_str = cli_workspace or env_workspace or "."
-        default_workspace = Path(workspace_str).resolve()
+        # --- runtime_dir ---
+        runtime_dir_env = env.get("CWS_RUNTIME_DIR")
+        if runtime_dir_env:
+            runtime_dir = Path(runtime_dir_env).resolve()
+        else:
+            runtime_dir = _default_runtime_dir(workspace)
 
-        runtime_dir = Path(env.get("CWS_RUNTIME_DIR", ".omx/runtime")).resolve()
         state_file = runtime_dir / "bridge-state.json"
 
-        domain = env.get("FEISHU_DOMAIN", "https://open.feishu.cn").rstrip("/")
+        domain = _get("FEISHU_DOMAIN", "https://open.feishu.cn").rstrip("/")
         feishu = FeishuConfig(
-            app_id=env.get("FEISHU_APP_ID"),
-            app_secret=env.get("FEISHU_APP_SECRET"),
+            app_id=_get("FEISHU_APP_ID") or None,
+            app_secret=_get("FEISHU_APP_SECRET") or None,
             domain=domain,
-            base_url=env.get("FEISHU_BASE_URL", f"{domain}/open-apis"),
+            base_url=_get("FEISHU_BASE_URL", f"{domain}/open-apis"),
             allowed_user_ids=tuple(
                 v.strip()
-                for v in env.get("FEISHU_ALLOWED_USERS", "").split(",")
+                for v in _get("FEISHU_ALLOWED_USERS", "").split(",")
                 if v.strip()
             ),
         )
@@ -161,37 +219,38 @@ class AppConfig:
         agent: AgentConfig
         if agent_type == "codex":
             agent = CodexAgentConfig(
-                command=env.get("CODEX_COMMAND", "codex"),
+                command=_get("CODEX_COMMAND", "codex"),
                 app_server_args=tuple(
                     p
-                    for p in env.get("CODEX_APP_SERVER_ARGS", "app-server").split(" ")
+                    for p in _get("CODEX_APP_SERVER_ARGS", "app-server").split(" ")
                     if p
                 ),
-                model=env.get("CODEX_MODEL", "gpt-5.4"),
-                approval_policy=env.get("CODEX_APPROVAL_POLICY", "on-request"),
-                approvals_reviewer=env.get("CODEX_APPROVALS_REVIEWER", "user"),
-                sandbox=env.get("CODEX_SANDBOX", "workspace-write"),
-                service_tier=env.get("CODEX_SERVICE_TIER") or None,
+                model=_get("CODEX_MODEL", "gpt-5.4"),
+                approval_policy=_get("CODEX_APPROVAL_POLICY", "on-request"),
+                approvals_reviewer=_get("CODEX_APPROVALS_REVIEWER", "user"),
+                sandbox=_get("CODEX_SANDBOX", "workspace-write"),
+                service_tier=_get("CODEX_SERVICE_TIER") or None,
             )
         elif agent_type == "claude-code":
             agent = ClaudeCodeAgentConfig(
-                model=env.get("CLAUDE_MODEL") or None,
-                permission_mode=env.get("CLAUDE_PERMISSION_MODE", "default"),
+                model=_get("CLAUDE_MODEL") or None,
+                permission_mode=_get("CLAUDE_PERMISSION_MODE", "default"),
             )
         elif agent_type == "opencode":
             allow_auto_approve = getattr(args, "allow_auto_approve", False) or False
+            opencode_port = _get("OPENCODE_PORT")
             agent = OpencodeAgentConfig(
-                command=env.get("OPENCODE_COMMAND", "opencode"),
-                host=env.get("OPENCODE_HOST", "127.0.0.1"),
-                port=int(env["OPENCODE_PORT"]) if env.get("OPENCODE_PORT") else None,
+                command=_get("OPENCODE_COMMAND", "opencode"),
+                host=_get("OPENCODE_HOST", "127.0.0.1"),
+                port=int(opencode_port) if opencode_port else None,
                 allow_auto_approve=allow_auto_approve,
-                startup_timeout_s=float(env.get("OPENCODE_STARTUP_TIMEOUT_S", "5.0")),
+                startup_timeout_s=float(_get("OPENCODE_STARTUP_TIMEOUT_S", "5.0")),
             )
         else:
             raise ConfigConflictError(f"unknown agent type: {agent_type!r}")
 
         return cls(
-            default_workspace=default_workspace,
+            workspace=workspace,
             runtime_dir=runtime_dir,
             state_file=state_file,
             feishu=feishu,
@@ -205,7 +264,6 @@ class AppConfig:
         # Build a minimal namespace; agent defaults to codex for backward compat
         ns = argparse.Namespace(
             agent=env.get("CWS_AGENT", DEFAULT_AGENT),
-            workspace=None,
             allow_auto_approve=False,
             force=False,
         )

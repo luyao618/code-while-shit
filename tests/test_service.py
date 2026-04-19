@@ -114,7 +114,7 @@ class _FakeTurn:
 
 def build_config(tmp: str) -> AppConfig:
     return AppConfig(
-        default_workspace=Path(tmp) / "workspace",
+        workspace=Path(tmp) / "workspace",
         runtime_dir=Path(tmp) / "runtime",
         state_file=Path(tmp) / "runtime" / "state.json",
         feishu=FeishuConfig(None, None, "https://open.feishu.cn", "https://example.test", (),),
@@ -222,7 +222,7 @@ class AdditionalBridgeServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = build_config(tmp)
             config = AppConfig(
-                default_workspace=config.default_workspace,
+                workspace=config.default_workspace,
                 runtime_dir=config.runtime_dir,
                 state_file=config.state_file,
                 feishu=FeishuConfig(None, None, "https://open.feishu.cn", "https://example.test", ("owner",),),
@@ -478,7 +478,7 @@ class AdditionalBridgeServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = build_config(tmp)
             config = AppConfig(
-                default_workspace=config.default_workspace,
+                workspace=config.default_workspace,
                 runtime_dir=config.runtime_dir,
                 state_file=config.state_file,
                 feishu=FeishuConfig(None, None, "https://open.feishu.cn", "https://example.test", ("owner",),),

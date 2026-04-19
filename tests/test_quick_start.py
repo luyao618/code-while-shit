@@ -68,30 +68,26 @@ def _run(args, cwd, env=None):
     )
 
 
-def test_init_creates_env_and_workspace(tmp_path):
+def test_init_creates_global_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     r = _run(["init"], cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    env_path = tmp_path / ".env"
-    assert env_path.exists()
-    contents = env_path.read_text(encoding="utf-8")
-    assert "FEISHU_APP_ID=" in contents
-    assert f"CWS_DEFAULT_WORKSPACE={tmp_path.resolve()}" in contents
+    config_path = tmp_path / "cfg" / "cws" / "config.toml"
+    assert config_path.exists()
+    contents = config_path.read_text(encoding="utf-8")
+    assert "feishu" in contents
+    assert "app_id" in contents
 
 
-def test_init_does_not_overwrite_existing_env(tmp_path):
-    env_path = tmp_path / ".env"
-    env_path.write_text("CUSTOM=1\n", encoding="utf-8")
+def test_init_does_not_overwrite_existing_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    config_path = tmp_path / "cfg" / "cws" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("[feishu]\napp_id = \"existing\"\n", encoding="utf-8")
     r = _run(["init"], cwd=tmp_path)
     assert r.returncode == 0
-    assert env_path.read_text(encoding="utf-8") == "CUSTOM=1\n"
-    assert "保留不覆盖" in r.stdout
-
-
-def test_init_records_non_default_agent(tmp_path):
-    r = _run(["init", "--agent", "claude-code"], cwd=tmp_path)
-    assert r.returncode == 0
-    contents = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "CWS_AGENT=claude-code" in contents
+    # Content should be preserved
+    assert "existing" in config_path.read_text(encoding="utf-8")
 
 
 def test_doctor_without_agent_surveys_all_three(tmp_path):

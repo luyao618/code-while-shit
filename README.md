@@ -15,25 +15,43 @@
 ## Quick Start
 
 ```bash
-pip install -e .          # 或 uv pip install -e .
-cws init                  # 生成 .env 与 workspace
-# 编辑 .env，填入 FEISHU_APP_ID / FEISHU_APP_SECRET
-cws doctor                # 自检 Feishu 凭证 + agent 依赖
-cws serve                 # 默认 claude-code，自动后台运行
-cws status                # 查看运行状态
-cws stop                  # 优雅停止
-cws restart               # stop + serve
+curl -fsSL https://raw.githubusercontent.com/luyao618/code-while-shit/main/scripts/install.sh | sh
 ```
 
-`cws serve` 默认 fork 到后台，日志写到 `$CWS_RUNTIME_DIR/serve.log`；前台运行加 `--foreground`。切换 agent：`cws serve --agent codex` 或 `cws serve --agent opencode --allow-auto-approve`。`.env` 自动加载（**勿 commit**）。
+然后：
+
+```bash
+cws init                                          # 生成 ~/.config/cws/config.toml
+cws config set feishu.app_id YOUR_APP_ID
+cws config set feishu.app_secret YOUR_APP_SECRET
+cd /path/to/your/workspace   # 重要：cws serve 以 cwd 作为 workspace
+cws serve
+```
+
+`cws serve` 默认 fork 到后台，日志写到 `$CWS_RUNTIME_DIR/serve.log`；前台运行加 `--foreground`。切换 agent：`cws serve --agent codex` 或 `cws serve --agent opencode --allow-auto-approve`。
+
+### Developers
+
+```bash
+git clone https://github.com/luyao618/code-while-shit.git
+cd code-while-shit
+uv pip install -e .
+cws doctor
+```
 
 ## CLI 命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `cws init [--workspace PATH] [--agent X]` | 生成模板 `.env` 并创建 workspace 目录 |
+| `cws init` | 生成全局配置模板 `~/.config/cws/config.toml` |
+| `cws config path` | 打印全局配置文件路径 |
+| `cws config list` | 列出所有配置项 |
+| `cws config get <key>` | 获取单个配置值（如 `feishu.app_id`）|
+| `cws config set <key> <value>` | 写入配置项 |
+| `cws config unset <key>` | 删除配置项 |
+| `cws config edit` | 用 `$EDITOR` 打开配置文件 |
 | `cws doctor [--agent X]` | 检查 Feishu 凭证、`lark-oapi` 及 Agent 依赖 |
-| `cws serve [--agent X] [--workspace PATH] [--allow-auto-approve] [--force] [--foreground]` | 启动飞书 WebSocket bridge |
+| `cws serve [--agent X] [--allow-auto-approve] [--force] [--foreground]` | 启动飞书 WebSocket bridge（workspace = cwd） |
 | `cws status` | 显示当前 serve 进程（pid / agent / workspace） |
 | `cws stop [--timeout S]` | SIGTERM → 超时后 SIGKILL，并清理 lockfile |
 | `cws restart [serve 选项] [--timeout S]` | 先 stop 再 serve |
@@ -61,13 +79,12 @@ cws restart               # stop + serve
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | — | 飞书应用凭证（必需） |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | — | 飞书应用凭证（必需；也可通过 `cws config set feishu.app_id` 设置） |
 | `FEISHU_DOMAIN` | `https://open.feishu.cn` | 飞书 API 域名（Lark 国际版可改） |
 | `FEISHU_BASE_URL` | `${FEISHU_DOMAIN}/open-apis` | Open API 基址 |
 | `FEISHU_ALLOWED_USERS` | 空 | 逗号分隔 `open_id` allowlist；空=不限制 |
-| `CWS_DEFAULT_WORKSPACE` | `.` | 默认工作目录 |
-| `CWS_RUNTIME_DIR` | `.omx/runtime` | 运行时目录 |
-| `CWS_AGENT` | `claude-code` | 默认 agent |
+| `CWS_RUNTIME_DIR` | `~/.local/share/cws/runtime/<hash>/` | 运行时目录（覆盖默认） |
+| `CWS_AGENT` | `claude-code` | 默认 agent（覆盖 `[agent] default` in config.toml） |
 | `CODEX_*` | — | Codex 后端配置（`CODEX_COMMAND` / `CODEX_MODEL` / `CODEX_APPROVAL_POLICY` / `CODEX_SANDBOX` 等） |
 
 ## 开发与测试
@@ -103,25 +120,43 @@ The service receives Feishu messages/interactions, binds sessions to a workspace
 ## Quick Start
 
 ```bash
-pip install -e .          # or: uv pip install -e .
-cws init                  # scaffold .env and workspace
-# edit .env: fill in FEISHU_APP_ID / FEISHU_APP_SECRET
-cws doctor                # validate Feishu creds + agent deps
-cws serve                 # default claude-code, runs in background
-cws status                # show current serve process
-cws stop                  # graceful stop
-cws restart               # stop + serve
+curl -fsSL https://raw.githubusercontent.com/luyao618/code-while-shit/main/scripts/install.sh | sh
 ```
 
-`cws serve` forks to background by default and writes logs to `$CWS_RUNTIME_DIR/serve.log`; pass `--foreground` to run in foreground. Switch agents with `cws serve --agent codex` or `cws serve --agent opencode --allow-auto-approve`. `.env` is auto-loaded (**do not commit**).
+Then:
+
+```bash
+cws init                                          # creates ~/.config/cws/config.toml
+cws config set feishu.app_id YOUR_APP_ID
+cws config set feishu.app_secret YOUR_APP_SECRET
+cd /path/to/your/workspace   # important: cws serve uses cwd as workspace
+cws serve
+```
+
+`cws serve` forks to background by default and writes logs to `$CWS_RUNTIME_DIR/serve.log`; pass `--foreground` to run in foreground. Switch agents with `cws serve --agent codex` or `cws serve --agent opencode --allow-auto-approve`.
+
+### Developers
+
+```bash
+git clone https://github.com/luyao618/code-while-shit.git
+cd code-while-shit
+uv pip install -e .
+cws doctor
+```
 
 ## CLI
 
 | Command | Purpose |
 | --- | --- |
-| `cws init [--workspace PATH] [--agent X]` | Scaffold `.env` template and workspace |
+| `cws init` | Create global config template at `~/.config/cws/config.toml` |
+| `cws config path` | Print path to global config file |
+| `cws config list` | Print all config values (TOML format) |
+| `cws config get <key>` | Print one value (e.g. `feishu.app_id`) |
+| `cws config set <key> <value>` | Write a config value |
+| `cws config unset <key>` | Remove a config key |
+| `cws config edit` | Open config in `$EDITOR` |
 | `cws doctor [--agent X]` | Validate Feishu creds, `lark-oapi`, and agent deps |
-| `cws serve [--agent X] [--workspace PATH] [--allow-auto-approve] [--force] [--foreground]` | Start the Feishu WebSocket bridge |
+| `cws serve [--agent X] [--allow-auto-approve] [--force] [--foreground]` | Start the Feishu WebSocket bridge (workspace = cwd) |
 | `cws status` | Show running serve (pid / agent / workspace) |
 | `cws stop [--timeout S]` | SIGTERM, SIGKILL on timeout, cleans lockfile |
 | `cws restart [serve flags] [--timeout S]` | stop + serve |
@@ -149,13 +184,12 @@ One Feishu bot allows only one `serve` at a time, enforced by `.omx/runtime/serv
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | — | Feishu app credentials (required) |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | — | Feishu app credentials (required; also settable via `cws config set feishu.app_id`) |
 | `FEISHU_DOMAIN` | `https://open.feishu.cn` | Feishu API domain (override for Lark) |
 | `FEISHU_BASE_URL` | `${FEISHU_DOMAIN}/open-apis` | Open API base URL |
 | `FEISHU_ALLOWED_USERS` | empty | Comma-separated `open_id` allowlist; empty = unrestricted |
-| `CWS_DEFAULT_WORKSPACE` | `.` | Default workspace |
-| `CWS_RUNTIME_DIR` | `.omx/runtime` | Runtime directory |
-| `CWS_AGENT` | `claude-code` | Default agent |
+| `CWS_RUNTIME_DIR` | `~/.local/share/cws/runtime/<hash>/` | Runtime directory (overrides default) |
+| `CWS_AGENT` | `claude-code` | Default agent (overrides `[agent] default` in config.toml) |
 | `CODEX_*` | — | Codex backend (`CODEX_COMMAND` / `CODEX_MODEL` / `CODEX_APPROVAL_POLICY` / `CODEX_SANDBOX`, etc.) |
 
 ## Develop & test
