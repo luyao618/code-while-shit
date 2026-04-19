@@ -65,6 +65,9 @@ class ClaudeCodeAgentTurn(AgentTurn):
         self.kill_event = threading.Event()
         self._cancel_event = threading.Event()
         self._summary_chunks: list[str] = []
+        # session_id reported by the SDK during this turn; used to persist
+        # the conversation thread so subsequent turns resume the same context.
+        self._observed_session_id: str | None = None
 
     def __enter__(self) -> "ClaudeCodeAgentTurn":
         self.state = TurnState.RUNNING
@@ -91,6 +94,8 @@ class ClaudeCodeAgentTurn(AgentTurn):
     def run(self) -> TurnOutcome:
         sdk = _import_sdk()
         text_parts: list[str] = []
+        # Default thread_id is the existing one (resume) or a placeholder until
+        # the SDK reports the real session_id. We update it from observed events.
         thread_id = self._existing_thread_id or f"cc-{id(self)}"
 
         self._publish_status(ProgressUpdate("running", "处理中：claude-code 正在执行任务。"))
@@ -150,8 +155,14 @@ class ClaudeCodeAgentTurn(AgentTurn):
             outcome_status = "completed"
             self.state = TurnState.COMPLETED
 
+        # Prefer the real session_id observed from the SDK so the next turn
+        # can resume the same Claude Code conversation. Fall back to whatever
+        # we started with (resume id or placeholder) if the SDK never reported
+        # one (e.g. transport error before the first message).
+        final_thread_id = self._observed_session_id or thread_id
+
         return TurnOutcome(
-            thread_id=thread_id,
+            thread_id=final_thread_id,
             summary=summary.strip() or ("执行完成。" if outcome_status == "completed" else "执行结束。"),
             status=outcome_status,
             raw_text=summary,
@@ -163,7 +174,19 @@ class ClaudeCodeAgentTurn(AgentTurn):
         query = getattr(sdk, "query", None)
         if query is not None:
             opts_cls = getattr(sdk, "ClaudeAgentOptions", None)
-            options = opts_cls(cwd=self._workspace_path) if opts_cls else None
+            options = None
+            if opts_cls is not None:
+                opts_kwargs: dict[str, Any] = {"cwd": self._workspace_path}
+                # Resume the previous Claude Code session when we have one,
+                # so multi-turn conversations actually share context instead
+                # of starting fresh on every message.
+                if self._existing_thread_id and not self._existing_thread_id.startswith("cc-"):
+                    opts_kwargs["resume"] = self._existing_thread_id
+                try:
+                    options = opts_cls(**opts_kwargs)
+                except TypeError:
+                    # Older SDKs may not accept `resume`; fall back to cwd-only.
+                    options = opts_cls(cwd=self._workspace_path)
             async for msg in query(prompt=self._prompt, options=options):
                 yield msg
             return
@@ -180,6 +203,21 @@ class ClaudeCodeAgentTurn(AgentTurn):
         )
 
     def _handle_event(self, event: Any, text_parts: list[str]) -> None:
+        # Capture session_id from any event that carries one. SystemMessage
+        # ("init" subtype), AssistantMessage, ResultMessage and SessionMessage
+        # all expose it. We keep the first non-empty value we see; the SDK
+        # uses a single id per query() invocation.
+        if self._observed_session_id is None:
+            sid = getattr(event, "session_id", None)
+            if not sid and isinstance(event, dict):
+                sid = event.get("session_id")
+            if not sid:
+                data = getattr(event, "data", None)
+                if isinstance(data, dict):
+                    sid = data.get("session_id")
+            if isinstance(sid, str) and sid.strip():
+                self._observed_session_id = sid.strip()
+
         text = None
         if hasattr(event, "text"):
             text = event.text

@@ -11,6 +11,7 @@
 
 ### Fixed
 - Progress card and milestone messages no longer hard-code "Codex". When running with the `claude-code` or `opencode` agent, the card now correctly shows "Agent 已结束当前执行" instead of misleadingly saying "Codex 已结束当前执行".
+- **claude-code multi-turn context**: the `claude-code` backend now actually resumes the previous Claude Code session between turns. Previously the saved `agent_thread_id` was stored but never passed back to `claude_agent_sdk.query()`, so every Feishu message started a fresh session with no memory of prior turns. Fix: capture `session_id` from SDK events and pass it back via `ClaudeAgentOptions(resume=...)` on the next turn.
 
 ### Migration
 - Users on the previous version may have leftover `~/.local/share/cws/runtime/<12-hex>/` directories. They are not used anymore — safe to delete with `rm -rf ~/.local/share/cws/runtime/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]`. Existing thread bindings stored under those dirs will not migrate automatically; the next `cws serve` starts a fresh `bridge-state.json` at the new global path.
