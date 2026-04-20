@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import uuid
 from concurrent.futures import Future
 from typing import Any, Callable
 
@@ -13,6 +14,40 @@ from ..models import (
     TurnOutcome,
 )
 from .base import AgentBackend, AgentTurn, CancelNotSupported, TurnState
+
+# Tool name → ApprovalRequest method mapping. Methods reuse codex's vocabulary so
+# `ApprovalPolicy` (which keys off `request.method`) treats these the same way.
+_FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+_COMMAND_TOOLS = {"Bash"}
+
+
+def _classify_tool(tool_name: str, tool_input: dict[str, Any]) -> tuple[str, str | None, list[str]]:
+    """Map (tool_name, tool_input) → (approval_method, command, file_paths).
+
+    The returned `method` matches the codex JSON-RPC vocabulary so the shared
+    `ApprovalPolicy` can evaluate the request without knowing it came from
+    claude-code.
+    """
+    if tool_name in _COMMAND_TOOLS:
+        cmd = tool_input.get("command")
+        return "item/commandExecution/requestApproval", cmd if isinstance(cmd, str) else None, []
+    if tool_name in _FILE_TOOLS:
+        paths: list[str] = []
+        for key in ("file_path", "path", "notebook_path"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                paths.append(value)
+        edits = tool_input.get("edits")
+        if isinstance(edits, list):
+            for edit in edits:
+                if isinstance(edit, dict):
+                    p = edit.get("file_path") or edit.get("path")
+                    if isinstance(p, str) and p.strip():
+                        paths.append(p)
+        return "item/fileChange/requestApproval", None, paths
+    # Unknown tool → treat as a generic permission escalation so the policy
+    # routes it to a human.
+    return "item/permissions/requestApproval", None, []
 
 JsonDict = dict[str, Any]
 
@@ -178,12 +213,21 @@ class ClaudeCodeAgentTurn(AgentTurn):
         try:
             client = self._backend._get_or_connect_client(sdk, self._conversation, self._workspace_path)
 
+            # Register this turn as the active one for the (conversation, workspace)
+            # so the persistent client's can_use_tool callback can route approval
+            # questions back through *this* turn's request_approval bridge.
+            client_key = self._backend._client_key(self._conversation, self._workspace_path)
+            self._backend._set_active_turn(client_key, self)
+
             async def _drive() -> None:
-                await client.query(self._prompt)
-                async for event in client.receive_response():
-                    if self._cancel_event.is_set():
-                        return
-                    self._handle_event(event, text_parts)
+                try:
+                    await client.query(self._prompt)
+                    async for event in client.receive_response():
+                        if self._cancel_event.is_set():
+                            return
+                        self._handle_event(event, text_parts)
+                finally:
+                    self._backend._clear_active_turn(client_key, self)
 
             self._drain_future = self._backend._loop.submit(_drive())
             try:
@@ -267,6 +311,36 @@ class ClaudeCodeAgentTurn(AgentTurn):
             text_parts.append(text)
             self._publish_status(ProgressUpdate("running", text))
 
+    # Called from the SDK loop thread via run_in_executor — must be sync because
+    # service._request_approval blocks waiting for the user's Feishu click.
+    def handle_tool_permission(self, tool_name: str, tool_input: dict[str, Any]) -> tuple[bool, str | None]:
+        """Translate a Claude SDK can_use_tool callback into a Feishu approval card.
+
+        Returns (allow, deny_message). On allow, the caller turns this into a
+        PermissionResultAllow; on deny, into PermissionResultDeny with the
+        provided message (which Claude surfaces to the model so it can adjust).
+        """
+        method, command, file_paths = _classify_tool(tool_name, tool_input)
+        cwd_value = tool_input.get("cwd") if isinstance(tool_input.get("cwd"), str) else None
+        approval = ApprovalRequest(
+            request_id=f"cc-{uuid.uuid4().hex}",
+            conversation=self._conversation,
+            workspace_path=self._workspace_path,
+            method=method,
+            command=command,
+            cwd=cwd_value or self._workspace_path,
+            reason=f"claude-code 请求使用工具：{tool_name}",
+            file_paths=file_paths,
+            permissions={"tool": tool_name, "input_keys": sorted(tool_input.keys())},
+        )
+        try:
+            decision = self._request_approval(approval)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"approval bridge error: {exc}"
+        if decision == "approve":
+            return True, None
+        return False, "用户拒绝了该工具调用。"
+
 
 class ClaudeCodeAgentBackend(AgentBackend):
     agent_type = "claude-code"
@@ -280,7 +354,27 @@ class ClaudeCodeAgentBackend(AgentBackend):
         # between turns.
         self._clients: dict[str, Any] = {}
         self._clients_lock = threading.Lock()
+        # Active ClaudeCodeAgentTurn per client_key. Looked up by the
+        # can_use_tool callback installed on the persistent client. Only one
+        # turn runs at a time per (conversation, workspace) so a single slot
+        # per key is enough.
+        self._active_turns: dict[str, "ClaudeCodeAgentTurn"] = {}
+        self._active_lock = threading.Lock()
         self._loop = _LoopThread()
+
+    def _set_active_turn(self, client_key: str, turn: "ClaudeCodeAgentTurn") -> None:
+        with self._active_lock:
+            self._active_turns[client_key] = turn
+
+    def _clear_active_turn(self, client_key: str, turn: "ClaudeCodeAgentTurn") -> None:
+        with self._active_lock:
+            current = self._active_turns.get(client_key)
+            if current is turn:
+                self._active_turns.pop(client_key, None)
+
+    def _get_active_turn(self, client_key: str) -> "ClaudeCodeAgentTurn | None":
+        with self._active_lock:
+            return self._active_turns.get(client_key)
 
     @staticmethod
     def _client_key(conversation: ConversationRef, workspace_path: str) -> str:
@@ -310,7 +404,41 @@ class ClaudeCodeAgentBackend(AgentBackend):
                 "claude_agent_sdk.ClaudeSDKClient not available; persistent "
                 "session mode requires a recent claude-agent-sdk."
             )
-        options = opts_cls(cwd=workspace_path) if opts_cls else None
+
+        # Build the can_use_tool callback. This runs on the SDK loop thread;
+        # it must NOT directly call request_approval (which blocks waiting on
+        # the user's Feishu click) or it will freeze the very loop draining
+        # SDK events. Instead, off-load to a thread executor.
+        permission_allow_cls = getattr(sdk, "PermissionResultAllow", None)
+        permission_deny_cls = getattr(sdk, "PermissionResultDeny", None)
+
+        async def _can_use_tool(tool_name, tool_input, _ctx):
+            turn = self._get_active_turn(key)
+            if turn is None:
+                # No turn registered → safer to deny than to silently allow.
+                if permission_deny_cls is not None:
+                    return permission_deny_cls(message="no active turn to authorize this tool call")
+                return {"behavior": "deny", "message": "no active turn"}
+            loop = asyncio.get_running_loop()
+            allow, deny_msg = await loop.run_in_executor(
+                None, turn.handle_tool_permission, tool_name, dict(tool_input or {})
+            )
+            if allow:
+                if permission_allow_cls is not None:
+                    return permission_allow_cls()
+                return {"behavior": "allow"}
+            if permission_deny_cls is not None:
+                return permission_deny_cls(message=deny_msg or "用户拒绝")
+            return {"behavior": "deny", "message": deny_msg or "用户拒绝"}
+
+        if opts_cls is not None:
+            try:
+                options = opts_cls(cwd=workspace_path, can_use_tool=_can_use_tool)
+            except TypeError:
+                # Older SDK without can_use_tool kwarg — fall back to cwd-only.
+                options = opts_cls(cwd=workspace_path)
+        else:
+            options = None
 
         async def _connect():
             client = client_cls(options=options) if options is not None else client_cls()

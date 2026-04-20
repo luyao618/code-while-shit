@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.2.4 (2026-04-20)
+
+### Fixed
+- **claude-code 现在能弹出真正的飞书授权卡片**。之前的 `ClaudeCodeAgentBackend` 接收了 `request_approval` 回调却从未调用，且 `ClaudeAgentOptions` 没有挂 `can_use_tool` 也没设 `permission_mode`。结果 Claude Code CLI 在需要 Bash/Edit/Write 等工具时静默挂起（或者直接把"请批准上面的请求"作为 assistant 文本流出来——但根本没有"上面的请求"，因为卡片从未发出），表现为图里那种"还没删除——请在权限弹窗中点击允许"的死循环。
+  - 持久化 `ClaudeSDKClient` 上现在挂了一个 `can_use_tool` 异步回调，把 `(tool_name, tool_input)` 翻译成 `ApprovalRequest` 并通过现有的 `ApprovalPolicy` → `BridgeService._request_approval` → 飞书卡片链路走完。
+  - 工具名 → `method` 映射复用 codex 的 JSON-RPC 词汇（`Bash` → `item/commandExecution/requestApproval`，`Write/Edit/MultiEdit/NotebookEdit` → `item/fileChange/requestApproval`，其他 → `item/permissions/requestApproval`），所以 `ApprovalPolicy` 的工作区/危险命令规则直接复用，无需 claude-code 专属策略。
+  - 回调跑在 SDK 后台 loop 上，但 `request_approval` 是阻塞 API（要等用户点击飞书卡片），所以通过 `loop.run_in_executor` 卸到线程池，避免冻结正在 drain 事件的 SDK loop。
+  - 后端新增 `_active_turns` 注册表，按 `(conversation, workspace)` 把当前 turn 暴露给持久 client 上的回调——一个 client 跨多 turn 复用，回调要找到"现在哪个 turn 在跑"才能把审批结果回填给正确的飞书会话。
+
 ## 0.2.3 (2026-04-20)
 
 ### Added

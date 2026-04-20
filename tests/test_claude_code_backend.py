@@ -160,3 +160,150 @@ def test_backend_kill_disconnects_clients():
         assert len(disconnect_calls) == 2
     finally:
         backend._loop.shutdown()
+
+
+def test_classify_tool_maps_bash_and_edit_to_codex_methods():
+    from cws.agents.claude_code import _classify_tool
+
+    method, command, paths = _classify_tool("Bash", {"command": "rm -rf foo"})
+    assert method == "item/commandExecution/requestApproval"
+    assert command == "rm -rf foo"
+    assert paths == []
+
+    method, command, paths = _classify_tool(
+        "Edit", {"file_path": "/tmp/a.py", "old_string": "x", "new_string": "y"}
+    )
+    assert method == "item/fileChange/requestApproval"
+    assert command is None
+    assert paths == ["/tmp/a.py"]
+
+    method, command, paths = _classify_tool(
+        "MultiEdit",
+        {"file_path": "/tmp/main.py", "edits": [{"file_path": "/tmp/other.py"}]},
+    )
+    assert method == "item/fileChange/requestApproval"
+    assert "/tmp/main.py" in paths and "/tmp/other.py" in paths
+
+    method, _command, _paths = _classify_tool("WebFetch", {"url": "x"})
+    assert method == "item/permissions/requestApproval"
+
+
+def test_handle_tool_permission_routes_to_request_approval_and_returns_allow():
+    """The Bash 'rm' case from the bug report: claude-code asks to delete a
+    file, the bridge must build an ApprovalRequest with the codex method
+    string and forward to the upstream request_approval callback. An 'approve'
+    decision must produce (True, None) so the can_use_tool callback can wrap
+    it in PermissionResultAllow."""
+    from cws.agents.claude_code import ClaudeCodeAgentTurn
+    from cws.models import ApprovalRequest, ConversationRef
+    from unittest.mock import MagicMock
+
+    seen: list[ApprovalRequest] = []
+
+    def fake_request_approval(req):
+        seen.append(req)
+        return "approve"
+
+    turn = ClaudeCodeAgentTurn(
+        backend=MagicMock(),
+        conversation=ConversationRef("feishu", "u", "c"),
+        workspace_path="/tmp/ws",
+        prompt="hi",
+        existing_thread_id=None,
+        request_approval=fake_request_approval,
+        request_input=MagicMock(),
+        publish_status=MagicMock(),
+    )
+
+    allow, msg = turn.handle_tool_permission("Bash", {"command": "rm good-husband.skill"})
+    assert allow is True
+    assert msg is None
+    assert len(seen) == 1
+    assert seen[0].method == "item/commandExecution/requestApproval"
+    assert seen[0].command == "rm good-husband.skill"
+    assert seen[0].workspace_path == "/tmp/ws"
+
+
+def test_handle_tool_permission_deny_returns_message():
+    from cws.agents.claude_code import ClaudeCodeAgentTurn
+    from cws.models import ConversationRef
+    from unittest.mock import MagicMock
+
+    turn = ClaudeCodeAgentTurn(
+        backend=MagicMock(),
+        conversation=ConversationRef("feishu", "u", "c"),
+        workspace_path="/tmp/ws",
+        prompt="hi",
+        existing_thread_id=None,
+        request_approval=lambda req: "deny",
+        request_input=MagicMock(),
+        publish_status=MagicMock(),
+    )
+    allow, msg = turn.handle_tool_permission("Edit", {"file_path": "/tmp/x"})
+    assert allow is False
+    assert msg and "拒绝" in msg
+
+
+def test_backend_active_turn_registry_round_trip():
+    from cws.agents.claude_code import ClaudeCodeAgentBackend
+    from cws.models import ConversationRef
+    from unittest.mock import MagicMock
+
+    backend = ClaudeCodeAgentBackend(config=MagicMock())
+    try:
+        conv = ConversationRef("feishu", "u", "c")
+        key = backend._client_key(conv, "/tmp/ws")
+        sentinel = MagicMock(name="turn")
+        assert backend._get_active_turn(key) is None
+        backend._set_active_turn(key, sentinel)
+        assert backend._get_active_turn(key) is sentinel
+        # Wrong-turn clear is a no-op (defensive against a stale finally block).
+        backend._clear_active_turn(key, MagicMock(name="other"))
+        assert backend._get_active_turn(key) is sentinel
+        backend._clear_active_turn(key, sentinel)
+        assert backend._get_active_turn(key) is None
+    finally:
+        backend._loop.shutdown()
+
+
+def test_backend_installs_can_use_tool_when_sdk_supports_it():
+    """If `ClaudeAgentOptions` accepts `can_use_tool`, the backend must wire
+    one up so the persistent client routes permission questions back through
+    the active turn instead of silently hanging."""
+    from cws.agents.claude_code import ClaudeCodeAgentBackend
+    from cws.models import ConversationRef
+    from unittest.mock import MagicMock
+
+    backend = ClaudeCodeAgentBackend(config=MagicMock())
+    try:
+        captured = {}
+
+        class FakeOptions:
+            def __init__(self, *, cwd, can_use_tool=None):
+                captured["cwd"] = cwd
+                captured["can_use_tool"] = can_use_tool
+
+        class FakeClient:
+            def __init__(self, options=None):
+                self.options = options
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        fake_sdk = MagicMock()
+        fake_sdk.ClaudeAgentOptions = FakeOptions
+        fake_sdk.ClaudeSDKClient = FakeClient
+        fake_sdk.PermissionResultAllow = type("Allow", (), {})
+        fake_sdk.PermissionResultDeny = type("Deny", (), {})
+
+        backend._get_or_connect_client(fake_sdk, ConversationRef("f", "u", "c"), "/tmp/ws")
+        assert captured["cwd"] == "/tmp/ws"
+        assert callable(captured["can_use_tool"]), (
+            "backend must install a can_use_tool callback so claude-code "
+            "approval requests reach the Feishu card flow"
+        )
+    finally:
+        backend._loop.shutdown()
