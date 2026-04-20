@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "code-while-shit"
-version = "0.2.3"
+version = "0.2.4"
 description = "Feishu-driven remote agent bridge (codex / claude-code / opencode) MVP"
 readme = "README.md"
 requires-python = ">=3.11"
