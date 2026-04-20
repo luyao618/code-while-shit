@@ -2,10 +2,9 @@
 
 通过飞书 WebSocket 远程驱动本机 AI 编程助手（codex / claude-code / opencode）的轻量桥接服务。
 
-<p align="center">
-  <img src="docs/images/demo-1.jpg" width="420" alt="飞书远程驱动本机 AI 编程助手 - 截图 1" />
-  <img src="docs/images/demo-2.jpg" width="420" alt="飞书远程驱动本机 AI 编程助手 - 截图 2" />
-</p>
+| | |
+|:---:|:---:|
+| <img src="docs/images/demo-1.jpg" width="420" alt="demo 1" /> | <img src="docs/images/demo-2.jpg" width="420" alt="demo 2" /> |
 
 ## 项目概览
 
