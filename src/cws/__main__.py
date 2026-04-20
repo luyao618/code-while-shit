@@ -73,6 +73,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=5.0,
         help="Seconds to wait for graceful shutdown before SIGKILL (default: 5)",
     )
+    stop_p.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Scan the process table and stop EVERY cws/vcws serve process "
+            "for the current user (ignores lockfile). Useful for cleaning up "
+            "orphans from crashed tests, project renames, or stray --force "
+            "starts that bypassed the singleton lock."
+        ),
+    )
 
     sub.add_parser("status", help="Show running serve info from lockfile")
 
@@ -237,6 +247,140 @@ def _run_stop(runtime_dir: Path, timeout: float) -> int:
     return 0
 
 
+def _scan_serve_pids() -> list[tuple[int, str]]:
+    """Return [(pid, argv-snippet), ...] for every cws/vcws serve process owned
+    by the current user.
+
+    We deliberately match a wide set of argv patterns:
+      - `cws serve` (current name)
+      - `python -m cws serve` (dev / editable installs)
+      - `vcws serve` / `python -m vcws serve` (legacy name from before the
+        project rename — these are exactly the orphans `cws stop` cannot see
+        because the binary name changed)
+
+    Excludes the pid of the calling stop command itself.
+    """
+    self_pid = os.getpid()
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        print(f"error: could not list processes via ps: {exc}", file=sys.stderr)
+        return []
+
+    matches: list[tuple[int, str]] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        head, _, rest = line.partition(" ")
+        try:
+            pid = int(head)
+        except ValueError:
+            continue
+        if pid == self_pid:
+            continue
+        cmd = rest.strip()
+        # Token match against argv components so we don't accidentally match
+        # editor windows or grep commands that mention the string.
+        tokens = cmd.split()
+        if "serve" not in tokens:
+            continue
+        # Skip search/inspection tools whose argv coincidentally contains the
+        # words "cws" and "serve" (e.g. `grep cws serve`, `pgrep -f cws serve`).
+        first_tok_base = tokens[0].rsplit("/", 1)[-1] if tokens else ""
+        if first_tok_base in {"grep", "pgrep", "pkill", "ps", "ag", "rg", "ack", "fzf"}:
+            continue
+        # Look for an argv token that is one of: cws, vcws, ends with /cws,
+        # ends with /vcws, or is a `-m cws` / `-m vcws` python invocation.
+        keywords = {"cws", "vcws"}
+        is_serve = False
+        for i, tok in enumerate(tokens):
+            base = tok.rsplit("/", 1)[-1]
+            if base in keywords:
+                is_serve = True
+                break
+            if tok == "-m" and i + 1 < len(tokens) and tokens[i + 1] in keywords:
+                is_serve = True
+                break
+        if not is_serve:
+            continue
+        matches.append((pid, cmd))
+    return matches
+
+
+def _terminate_pid(pid: int, timeout: float) -> str:
+    """SIGTERM, wait up to `timeout` seconds, then SIGKILL.
+
+    Returns one of: 'stopped', 'gone', 'kill-failed', 'no-perm'.
+    """
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return "gone"
+    except PermissionError:
+        return "no-perm"
+
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while time.monotonic() < deadline:
+        if not pid_alive(pid):
+            return "stopped"
+        time.sleep(0.1)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return "stopped"
+    for _ in range(20):
+        if not pid_alive(pid):
+            return "stopped"
+        time.sleep(0.1)
+    return "kill-failed"
+
+
+def _run_stop_all(timeout: float) -> int:
+    """Stop every cws/vcws serve process for the current user (ignores lockfile).
+
+    Why this exists: the regular `cws stop` only knows about the pid recorded
+    in the runtime_dir lockfile. Orphans from prior project names, pytest
+    fixtures that started `serve --force --foreground` and crashed before
+    teardown, or processes started under a different runtime_dir all slip
+    past it. Each orphan opens its own Feishu WebSocket and steals a fraction
+    of inbound messages, which manifests as "every chat message looks like a
+    new conversation" and "old hard-coded strings reappear".
+    """
+    matches = _scan_serve_pids()
+    if not matches:
+        print("no cws/vcws serve processes found")
+        return 0
+
+    print(f"found {len(matches)} serve process(es); stopping...")
+    failed: list[int] = []
+    for pid, cmd in matches:
+        # Truncate long argv for readability.
+        snippet = cmd if len(cmd) <= 120 else cmd[:117] + "..."
+        print(f"- pid={pid}  {snippet}")
+        result = _terminate_pid(pid, timeout)
+        if result == "stopped":
+            print(f"  → stopped")
+        elif result == "gone":
+            print(f"  → already gone")
+        elif result == "no-perm":
+            print(f"  → SKIPPED: permission denied (try sudo?)")
+            failed.append(pid)
+        else:
+            print(f"  → FAILED to kill")
+            failed.append(pid)
+
+    # Also clean up our own runtime_dir's lockfile if its pid is dead now.
+    # Best-effort; not fatal if it fails.
+    return 1 if failed else 0
+
+
 def _run_doctor(args: argparse.Namespace, config: AppConfig) -> int:
     problems: list[str] = []
     if not config.feishu.app_id:
@@ -391,6 +535,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_status(config.runtime_dir)
 
     if args.command == "stop":
+        if getattr(args, "all", False):
+            return _run_stop_all(args.timeout)
         return _run_stop(config.runtime_dir, args.timeout)
 
     if args.command == "restart":

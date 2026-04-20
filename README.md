@@ -53,7 +53,7 @@ cws doctor
 | `cws doctor [--agent X]` | 检查 Feishu 凭证、`lark-oapi` 及 Agent 依赖 |
 | `cws serve [--agent X] [--allow-auto-approve] [--force] [--foreground]` | 启动飞书 WebSocket bridge（workspace = cwd） |
 | `cws status` | 显示当前 serve 进程（pid / agent / workspace） |
-| `cws stop [--timeout S]` | SIGTERM → 超时后 SIGKILL，并清理 lockfile |
+| `cws stop [--timeout S] [--all]` | SIGTERM → 超时后 SIGKILL，并清理 lockfile；`--all` 扫描进程表强杀全部 cws/vcws serve（含 orphan、改名前的旧二进制） |
 | `cws restart [serve 选项] [--timeout S]` | 先 stop 再 serve |
 
 ### 会话内命令
@@ -163,7 +163,7 @@ cws doctor
 | `cws doctor [--agent X]` | Validate Feishu creds, `lark-oapi`, and agent deps |
 | `cws serve [--agent X] [--allow-auto-approve] [--force] [--foreground]` | Start the Feishu WebSocket bridge (workspace = cwd) |
 | `cws status` | Show running serve (pid / agent / workspace) |
-| `cws stop [--timeout S]` | SIGTERM, SIGKILL on timeout, cleans lockfile |
+| `cws stop [--timeout S] [--all]` | SIGTERM, SIGKILL on timeout, cleans lockfile; `--all` scans the process table and force-kills every cws/vcws serve (catches orphans and the legacy binary name) |
 | `cws restart [serve flags] [--timeout S]` | stop + serve |
 
 ### In-session commands
