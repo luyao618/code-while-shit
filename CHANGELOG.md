@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.3 (2026-04-20)
+
+### Added
+- `cws stop --all` — scan the process table and stop EVERY `cws`/`vcws` `serve` process for the current user, ignoring the runtime-dir lockfile. Designed to clean up orphans that the regular `cws stop` cannot see: pytest fixtures that started `serve --foreground --force` and crashed before teardown, processes from a previous project name (`vcws` from before the rename), and stray invocations under a different `runtime_dir`. Each orphan opens its own Feishu WebSocket and steals a fraction of inbound messages, manifesting as "every chat message looks like a new conversation" and "old hard-coded strings reappear in cards".
+
 ## 0.2.2 (2026-04-19)
 
 ### Changed
