@@ -2,6 +2,11 @@
 
 通过飞书 WebSocket 远程驱动本机 AI 编程助手（codex / claude-code / opencode）的轻量桥接服务。
 
+<p align="center">
+  <img src="docs/images/demo-1.jpg" width="420" alt="飞书远程驱动本机 AI 编程助手 - 截图 1" />
+  <img src="docs/images/demo-2.jpg" width="420" alt="飞书远程驱动本机 AI 编程助手 - 截图 2" />
+</p>
+
 ## 项目概览
 
 在同一套飞书入口下选择三种 Agent 后端之一驱动本地编程任务：
