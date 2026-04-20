@@ -1,4 +1,4 @@
-# code-while-shit — v0.2
+# code-while-shit — v0.2.3
 
 通过飞书 WebSocket 远程驱动本机 AI 编程助手（codex / claude-code / opencode）的轻量桥接服务。
 
@@ -108,7 +108,7 @@ uv tool uninstall code-while-shit
 
 ---
 
-# code-while-shit — v0.2 (English)
+# code-while-shit — v0.2.3 (English)
 
 Lightweight bridge that lets you drive local AI coding assistants (codex / claude-code / opencode) remotely via Feishu WebSocket.
 
